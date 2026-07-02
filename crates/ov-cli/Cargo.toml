@@ -1,0 +1,40 @@
+[package]
+name = "ov-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "open-voice CLI (openvoice): agnostic speech-to-text + text-to-speech"
+publish = false
+
+[[bin]]
+name = "openvoice"
+path = "src/main.rs"
+
+[features]
+default = []
+# Local Canary ONNX inference. Off by default so the nix + static-musl builds
+# stay free of ONNX Runtime; enable with `--features local`.
+local = ["ov-local/canary"]
+
+[dependencies]
+ov-core = { workspace = true }
+ov-audio = { workspace = true }
+ov-output = { workspace = true }
+ov-config = { workspace = true }
+ov-local = { workspace = true }
+ov-providers = { workspace = true }
+ov-engine = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+futures-util = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

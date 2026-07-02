@@ -1,0 +1,62 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ov-core",
+    "crates/ov-audio",
+    "crates/ov-output",
+    "crates/ov-config",
+    "crates/ov-local",
+    "crates/ov-providers",
+    "crates/ov-engine",
+    "crates/ov-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+authors = ["Grok Insider <admin@grokinsider.net>"]
+repository = "https://github.com/grok-insider/open-voice"
+
+[workspace.dependencies]
+# Internal crates. Path deps carry an explicit `version` so release-plz's
+# `cargo package` step never fails with "dependency does not specify a version"
+# (see the org AGENTS.md release gotchas).
+ov-core = { path = "crates/ov-core", version = "0.1.0" }
+ov-audio = { path = "crates/ov-audio", version = "0.1.0" }
+ov-output = { path = "crates/ov-output", version = "0.1.0" }
+ov-config = { path = "crates/ov-config", version = "0.1.0" }
+ov-local = { path = "crates/ov-local", version = "0.1.0" }
+ov-providers = { path = "crates/ov-providers", version = "0.1.0" }
+ov-engine = { path = "crates/ov-engine", version = "0.1.0" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+async-trait = "0.1"
+# TLS is rustls end-to-end: no system OpenSSL anywhere in the build path, which
+# keeps the static-musl release lane and the nix build free of native TLS glue.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "multipart", "stream"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "process", "time", "net"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+futures = "0.3"
+futures-util = "0.3"
+toml = "0.8"
+dirs = "6"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+base64 = "0.22"
+bytes = "1"
+urlencoding = "2"
+tempfile = "3"
+wiremock = "0.6"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.release]
+lto = "thin"
+strip = true

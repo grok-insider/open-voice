@@ -1,0 +1,25 @@
+[package]
+name = "ov-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "open-voice use-cases: provider selection, validation, fallback"
+publish = false
+
+[dependencies]
+# The engine depends ONLY on ov-core (the dependency rule). Adapters are
+# registered by the composition root (ov-cli).
+ov-core = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

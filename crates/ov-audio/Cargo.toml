@@ -1,0 +1,21 @@
+[package]
+name = "ov-audio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "open-voice audio decode/probe adapter (ffmpeg)"
+publish = false
+
+[dependencies]
+ov-core = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+tempfile = { workspace = true }
+
+[dev-dependencies]
+
+[lints]
+workspace = true

@@ -1,0 +1,32 @@
+[package]
+name = "ov-local"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "open-voice local (on-device) speech engines and model management"
+publish = false
+
+[features]
+default = []
+# Canary 1B v2 ONNX inference via transcribe-rs/ONNX Runtime. Off by default:
+# `ort` downloads ONNX Runtime binaries at build time, which the Nix sandbox
+# and the static-musl release lane can't do. Enable with
+# `--features ov-local/canary` (CI checks it compiles on ubuntu).
+canary = ["dep:transcribe-rs"]
+
+[dependencies]
+ov-core = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+futures-util = { workspace = true }
+transcribe-rs = { version = "0.3", features = ["onnx"], optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
