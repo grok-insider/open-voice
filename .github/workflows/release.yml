@@ -1,0 +1,233 @@
+name: Release
+
+# Automated versioning + GitHub Releases via release-plz (config: release-plz.toml),
+# then cross-platform prebuilt `openvoice` binaries attached to the Release.
+#
+# Flow on every push to master:
+#   * release-plz-pr      — opens/updates the release PR (bumps the single
+#                           [workspace.package].version + Cargo.lock); an AI
+#                           step rewrites the CHANGELOG section.
+#   * release-plz-release — when that PR is merged (release_always also cuts a
+#                           direct version bump), creates the `vX.Y.Z` tag +
+#                           GitHub Release from the changelog.
+#   * resolve / artifacts — build `openvoice` for Linux (x86_64/aarch64 musl
+#                           static), macOS (x86_64/arm64), and Windows, and attach.
+#
+# Cachix is handled in ci.yml's `build` job. Nothing is published to crates.io
+# (`git_only` + `publish = false`). Release artifacts use default features
+# (no local ONNX) so the Linux binaries stay fully static.
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  release-plz-pr:
+    name: release-plz PR
+    if: github.repository_owner == 'grok-insider'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Persist the PAT so the AI changelog step can push to the Release PR branch.
+          persist-credentials: true
+          token: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run release-plz (release-pr)
+        id: release-plz
+        uses: release-plz/action@v0.5
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+
+      # Rewrite the release PR's CHANGELOG section with user-facing, AI-written notes.
+      - name: Check out the Release PR
+        if: ${{ steps.release-plz.outputs.pr != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+          PR_JSON: ${{ steps.release-plz.outputs.pr }}
+        run: |
+          set -euo pipefail
+          pr="$(jq -r '.number // empty' <<<"$PR_JSON")"
+          ver="$(jq -r '.releases[0].version // empty' <<<"$PR_JSON")"
+          [ -n "$pr" ] && [ -n "$ver" ] || { echo "No release PR to enrich."; exit 0; }
+          gh pr checkout "$pr"
+          { echo "RP_PR=$pr"; echo "RP_VER=$ver"; } >> "$GITHUB_ENV"
+      - name: Generate AI changelog into the Release PR
+        if: ${{ env.RP_PR != '' }}
+        uses: grok-insider/release-changelog-action@v1
+        with:
+          version: ${{ env.RP_VER }}
+          openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+          project-description: "Agnostic speech-to-text + text-to-speech CLI: local Rust/ONNX engines plus OpenAI, ElevenLabs, Cartesia, and xAI providers"
+      - name: Commit AI changelog to the Release PR
+        if: ${{ env.RP_PR != '' }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet -- CHANGELOG.md; then
+            git add CHANGELOG.md
+            git commit -m "docs(changelog): generate release notes for v${RP_VER}"
+            git push
+          fi
+
+  release-plz-release:
+    name: release-plz release
+    if: github.repository_owner == 'grok-insider'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      releases_created: ${{ steps.release-plz.outputs.releases_created }}
+      releases: ${{ steps.release-plz.outputs.releases }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run release-plz (release)
+        id: release-plz
+        uses: release-plz/action@v0.5
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+
+  resolve:
+    name: resolve release tag
+    needs: release-plz-release
+    if: needs.release-plz-release.outputs.releases_created == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.r.outputs.tag }}
+      version: ${{ steps.r.outputs.version }}
+    steps:
+      - id: r
+        env:
+          RELEASES: ${{ needs.release-plz-release.outputs.releases }}
+        run: |
+          set -euo pipefail
+          echo "tag=$(echo "$RELEASES" | jq -r '.[0].tag')" >> "$GITHUB_OUTPUT"
+          echo "version=$(echo "$RELEASES" | jq -r '.[0].version')" >> "$GITHUB_OUTPUT"
+
+  artifacts:
+    name: ${{ matrix.target }}
+    needs: [release-plz-release, resolve]
+    if: needs.release-plz-release.outputs.releases_created == 'true'
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, cross: zig }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-musl, cross: zig }
+          - { os: macos-15-intel, target: x86_64-apple-darwin, cross: "" }
+          - { os: macos-14, target: aarch64-apple-darwin, cross: "" }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, cross: "" }
+    runs-on: ${{ matrix.os }}
+    env:
+      TARGET: ${{ matrix.target }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      TAG: ${{ needs.resolve.outputs.tag }}
+    steps:
+      - name: Checkout the released tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      # ring on windows-msvc assembles its x86_64 asm with nasm.
+      - name: Install nasm (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@v1
+      # zig supplies the cross C toolchain + musl libc for the Linux static builds.
+      - name: Install zig
+        if: matrix.cross == 'zig'
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.13.0
+      - name: Install cargo-zigbuild
+        if: matrix.cross == 'zig'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.target }}
+      - name: Build (zigbuild static)
+        if: matrix.cross == 'zig'
+        run: cargo zigbuild --release -p ov-cli --target "$TARGET"
+      - name: Build (native)
+        if: matrix.cross != 'zig'
+        run: cargo build --release -p ov-cli --target ${{ matrix.target }}
+      - name: Verify Linux binary is static
+        if: matrix.cross == 'zig'
+        run: |
+          set -euo pipefail
+          f="target/$TARGET/release/openvoice"
+          file "$f"
+          if ldd "$f" 2>&1 | grep -qiE 'libc\.so|GLIBC'; then
+            echo "::error::openvoice is dynamically linked against glibc"; exit 1
+          fi
+      - name: Package + upload (unix)
+        if: runner.os != 'Windows'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          stage="open-voice-$VERSION-$TARGET"
+          mkdir -p "$stage"
+          cp "target/$TARGET/release/openvoice" "$stage/"
+          cp README.md LICENSE "$stage/" 2>/dev/null || true
+          cat > "$stage/INSTALL.txt" <<EOF
+          open-voice $VERSION ($TARGET)
+
+          openvoice — agnostic speech-to-text + text-to-speech CLI.
+            openvoice transcribe audio.ogg --lang es --format txt,srt,json
+            openvoice speak "Hola mundo" --lang es --out hola.mp3
+            openvoice providers doctor
+
+          Install: put openvoice on your PATH. ffmpeg is required for
+          transcoding/streaming decode. Set provider API keys via env vars
+          (XAI_API_KEY, ELEVENLABS_API_KEY, CARTESIA_API_KEY, OPENAI_API_KEY).
+
+          Docs: https://github.com/grok-insider/open-voice
+          EOF
+          archive="$stage.tar.gz"
+          tar -czf "$archive" "$stage"
+          shasum -a 256 "$archive" > "$archive.sha256" 2>/dev/null || sha256sum "$archive" > "$archive.sha256"
+          gh release upload "$TAG" "$archive" "$archive.sha256" --clobber
+      - name: Package + upload (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = "open-voice-$env:VERSION-$env:TARGET"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "target/$env:TARGET/release/openvoice.exe" $stage
+          foreach ($f in "README.md","LICENSE") {
+            if (Test-Path $f) { Copy-Item $f $stage }
+          }
+          $archive = "$stage.zip"
+          Compress-Archive -Path "$stage/*" -DestinationPath $archive -Force
+          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
+          "$hash  $archive" | Out-File -FilePath "$archive.sha256" -Encoding ascii
+          gh release upload "$env:TAG" "$archive" "$archive.sha256" --clobber

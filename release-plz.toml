@@ -1,0 +1,67 @@
+# release-plz — automated versioning + releases for the open-voice workspace.
+# Docs: https://release-plz.dev/docs/config
+#
+# Model: every crate shares ONE version via `version.workspace = true`
+# (root Cargo.toml `[workspace.package] version`), so the binary crate `ov-cli`
+# is the single release unit. On each push to master, release-plz opens/updates
+# a "release PR" that bumps that one version field (all crates follow),
+# refreshes Cargo.lock, and regenerates the root CHANGELOG.md from Conventional
+# Commits; an AI step (release.yml) rewrites the section. Merging the release
+# PR tags `vX.Y.Z` and creates the GitHub Release.
+#
+# Nothing is published to crates.io: delivery is the GitHub Release (prebuilt
+# `openvoice` binaries for Linux/macOS/Windows) and the grok-insider cachix
+# cache — `flake.nix` reads the same version from Cargo.toml.
+
+[workspace]
+# Not on crates.io: determine the current version from the `v*` git tag instead
+# of the cargo registry, and never run `cargo publish`. (Set at BOTH the
+# workspace and the ov-cli package level — release-plz #2693: workspace-level
+# values don't always propagate to packages.)
+git_only = true
+publish = false
+# Release whenever master has an un-tagged version (robust after failed runs
+# or manual fixes, not only on the exact release-PR-merge commit).
+release_always = true
+# Application binaries + internal libraries, not a published API surface.
+semver_check = false
+# End-user app: treat `feat:` as a minor bump even on 0.x.
+features_always_increment_minor = true
+# Opt-in model: don't process any crate by default. `ov-cli` opts in below; the
+# other crates ride the shared workspace version with no tag/release of their
+# own.
+release = false
+pr_labels = ["release"]
+
+[[package]]
+name = "ov-cli"
+release = true
+git_only = true
+publish = false
+# One workspace-wide tag + release name, e.g. `v0.2.0`.
+git_tag_name = "v{{ version }}"
+git_release_name = "v{{ version }}"
+git_release_enable = true
+git_tag_enable = true
+changelog_path = "CHANGELOG.md"
+# `ov-cli` is the composition root that (transitively) depends on every other
+# crate, so a change anywhere ships inside the release. Fold all members'
+# commits into ov-cli's version bump + changelog.
+changelog_include = [
+    "ov-core",
+    "ov-audio",
+    "ov-output",
+    "ov-config",
+    "ov-local",
+    "ov-providers",
+    "ov-engine",
+]
+
+# Preserve the curated changelog header (release-plz inserts new sections below).
+[changelog]
+header = """# Changelog
+
+All notable, user-facing changes to open-voice are documented here. The format
+follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
+project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+"""

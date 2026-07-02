@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast, required gate: formatting, lints, and the hermetic test suite.
+  # ffmpeg is installed for the ov-audio decode tests (they skip gracefully
+  # when it's absent, but running them is the point).
+  rust:
+    name: fmt + clippy + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  # The `local` (ONNX/Canary) feature is excluded from the default build; make
+  # sure it keeps compiling. Not a required check (ort-sys downloads ONNX
+  # Runtime binaries, so it's network-dependent).
+  local-feature:
+    name: check --features local
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: local-feature
+      - run: cargo clippy -p ov-cli --features local --all-targets -- -D warnings
+
+  # On master pushes (plus tags + manual dispatch): build with Nix and push
+  # every store path to the grok-insider cachix cache, so NixOS consumers
+  # pointing at github:grok-insider/open-voice pull instead of compiling.
+  # PRs never publish (no secrets on fork PRs).
+  build:
+    name: nix build + cachix push (${{ matrix.system }})
+    if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            system: x86_64-linux
+          - runner: ubuntu-24.04-arm
+            system: aarch64-linux
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: Set up Cachix
+        uses: cachix/cachix-action@v15
+        with:
+          name: grok-insider
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          extraPullNames: nix-community
+
+      - name: Build open-voice
+        run: nix build .#packages.${{ matrix.system }}.default -L
+
+      - name: Flake check
+        run: nix flake check -L
