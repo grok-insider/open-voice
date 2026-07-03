@@ -31,13 +31,16 @@ jobs:
       - run: cargo test --workspace
 
   # The `local` (ONNX/Canary) feature is excluded from the default build; make
-  # sure it keeps compiling. Advisory only: ort-sys downloads ONNX Runtime
-  # binaries from cdn.pyke.io at build time, which intermittently 403s from
-  # GitHub-hosted runner IPs — never make this job required.
+  # sure it keeps compiling. ort-sys' own binary download (cdn.pyke.io) 403s
+  # from GitHub-hosted runner IPs, so we feed it a system ONNX Runtime from
+  # Microsoft's GitHub releases via ORT_LIB_LOCATION instead — deterministic,
+  # no pyke CDN involved. Keep the version in sync with what ort-sys expects
+  # (the `ms@X.Y.Z` component of its download URL).
   local-feature:
     name: check --features local
     runs-on: ubuntu-latest
-    continue-on-error: true
+    env:
+      ONNXRUNTIME_VERSION: 1.24.2
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -46,6 +49,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: local-feature
+      - name: Install ONNX Runtime (system strategy for ort-sys)
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 5 -o /tmp/onnxruntime.tgz \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz"
+          mkdir -p "$HOME/onnxruntime"
+          tar xzf /tmp/onnxruntime.tgz -C "$HOME/onnxruntime" --strip-components=1
+          echo "ORT_LIB_LOCATION=$HOME/onnxruntime/lib" >> "$GITHUB_ENV"
+          # The Microsoft tarball ships shared libraries only; ort-sys
+          # defaults to static linking for system libs and fails without this.
+          echo "ORT_PREFER_DYNAMIC_LINK=1" >> "$GITHUB_ENV"
       - run: cargo clippy -p ov-cli --features local --all-targets -- -D warnings
 
   # On master pushes (plus tags + manual dispatch): build with Nix and push
