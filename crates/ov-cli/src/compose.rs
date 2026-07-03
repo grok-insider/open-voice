@@ -80,6 +80,32 @@ pub fn local_canary_compiled() -> bool {
     cfg!(feature = "local")
 }
 
+pub fn local_qwen3_compiled() -> bool {
+    cfg!(feature = "local-tts")
+}
+
+/// Where the local Qwen3-TTS model would load from, if anywhere:
+/// explicit config dir → open-voice models dir → shared HF cache.
+pub fn local_qwen3_source(config: &Config) -> Option<Qwen3Source> {
+    let explicit = config.local.tts_model_dir.trim();
+    if !explicit.is_empty() {
+        return Some(Qwen3Source::Dir(std::path::PathBuf::from(explicit)));
+    }
+    let spec = &ov_local::models::QWEN3_TTS_CUSTOM_VOICE;
+    if spec.is_installed(&config.models_dir()) {
+        return Some(Qwen3Source::Dir(spec.dir(&config.models_dir())));
+    }
+    if ov_local::models::hf_cache_present(spec.repo) {
+        return Some(Qwen3Source::HfCache);
+    }
+    None
+}
+
+pub enum Qwen3Source {
+    Dir(std::path::PathBuf),
+    HfCache,
+}
+
 pub fn build(config: &Config) -> Composition {
     let decoder = Arc::new(FfmpegDecoder::default());
     let mut builder = Engine::builder().decoder(decoder.clone());
@@ -94,6 +120,23 @@ pub fn build(config: &Config) -> Composition {
         ));
         builder = builder.stt(provider);
         configured.push(ProviderId::LocalCanary);
+    }
+
+    // Local Qwen3-TTS first for TTS: free, private, quality parity with the
+    // hosted voices for the supported languages.
+    #[cfg(feature = "local-tts")]
+    if let Some(source) = local_qwen3_source(config) {
+        let model_dir = match source {
+            Qwen3Source::Dir(dir) => Some(dir),
+            Qwen3Source::HfCache => None,
+        };
+        let provider = Arc::new(ov_local::Qwen3TtsLocalProvider::new(
+            model_dir,
+            Some(config.local.tts_voice.clone()),
+            decoder.clone(),
+        ));
+        builder = builder.tts(provider);
+        configured.push(ProviderId::LocalQwen3);
     }
 
     if let Some(key) = config.api_key(ProviderId::Xai) {

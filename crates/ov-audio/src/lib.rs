@@ -10,8 +10,10 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use async_trait::async_trait;
-use ov_core::ports::{AudioDecoder, AudioSpec};
+use ov_core::domain::AudioCodec;
+use ov_core::ports::{AudioDecoder, AudioEncoder, AudioSpec};
 use ov_core::{CoreError, CoreResult};
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 /// MIME type guess from a file extension (used for multipart uploads).
@@ -139,6 +141,73 @@ impl AudioDecoder for FfmpegDecoder {
     }
 }
 
+#[async_trait]
+impl AudioEncoder for FfmpegDecoder {
+    async fn encode_wav(
+        &self,
+        wav: &[u8],
+        codec: AudioCodec,
+        sample_rate: Option<u32>,
+    ) -> CoreResult<Vec<u8>> {
+        // WAV in, WAV out, no resample: nothing to do.
+        if codec == AudioCodec::Wav && sample_rate.is_none() {
+            return Ok(wav.to_vec());
+        }
+        let format = match codec {
+            AudioCodec::Wav => "wav",
+            AudioCodec::Mp3 => "mp3",
+            AudioCodec::Flac => "flac",
+            AudioCodec::Aac => "adts",
+            AudioCodec::Opus => "opus",
+            AudioCodec::Pcm => "s16le",
+        };
+        let mut args: Vec<String> = vec![
+            "-y".into(),
+            "-hide_banner".into(),
+            "-loglevel".into(),
+            "error".into(),
+            "-i".into(),
+            "pipe:0".into(),
+        ];
+        if let Some(rate) = sample_rate {
+            args.push("-ar".into());
+            args.push(rate.to_string());
+        }
+        args.push("-f".into());
+        args.push(format.into());
+        args.push("pipe:1".into());
+
+        let mut child = Command::new(&self.ffmpeg)
+            .args(&args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| CoreError::Audio(format!("spawning {}: {e}", self.ffmpeg)))?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| CoreError::Audio("ffmpeg stdin unavailable".into()))?;
+        let input = wav.to_vec();
+        let writer = tokio::spawn(async move {
+            let _ = stdin.write_all(&input).await;
+            let _ = stdin.shutdown().await;
+        });
+        let output = child
+            .wait_with_output()
+            .await
+            .map_err(|e| CoreError::Audio(format!("running ffmpeg: {e}")))?;
+        writer.abort();
+        if !output.status.success() {
+            return Err(CoreError::Audio(format!(
+                "ffmpeg encode failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        Ok(output.stdout)
+    }
+}
+
 /// Write a minimal 16-bit PCM WAV file (test/tooling helper).
 pub fn write_wav(path: &Path, sample_rate: u32, channels: u16, samples: &[i16]) -> CoreResult<()> {
     let data_len = (samples.len() * 2) as u32;
@@ -232,6 +301,28 @@ mod tests {
             .unwrap();
         // 0.5s at 16kHz mono s16le = 16000 bytes; allow ffmpeg padding slack.
         assert!(pcm.len() >= 15_000, "pcm too short: {}", pcm.len());
+    }
+
+    #[tokio::test]
+    async fn encodes_wav_to_mp3() {
+        let Some(decoder) = ffmpeg_or_skip() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let input = sine_wav(dir.path(), 24_000, 0.5);
+        let wav = std::fs::read(&input).unwrap();
+        let mp3 = decoder
+            .encode_wav(&wav, AudioCodec::Mp3, None)
+            .await
+            .unwrap();
+        assert!(mp3.len() > 500, "mp3 too small: {}", mp3.len());
+        assert_ne!(&mp3[0..4], b"RIFF");
+        // WAV passthrough returns the input unchanged.
+        let same = decoder
+            .encode_wav(&wav, AudioCodec::Wav, None)
+            .await
+            .unwrap();
+        assert_eq!(same, wav);
     }
 
     #[tokio::test]

@@ -157,8 +157,13 @@ impl Default for XaiConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LocalConfig {
-    /// Directory holding local model directories (canary-1b-v2, ...).
+    /// Directory holding local model directories (canary-1b-v2, qwen3-tts...).
     pub models_dir: String,
+    /// Explicit Qwen3-TTS model directory override. Empty = the open-voice
+    /// models dir when fetched, otherwise the shared Hugging Face cache.
+    pub tts_model_dir: String,
+    /// Default named speaker for the local Qwen3 TTS engine.
+    pub tts_voice: String,
 }
 
 impl Config {
@@ -218,7 +223,7 @@ impl Config {
                 self.providers.xai.api_key.clone(),
                 self.providers.xai.api_key_env.clone(),
             ),
-            ProviderId::LocalCanary => return None,
+            ProviderId::LocalCanary | ProviderId::LocalQwen3 => return None,
         };
         literal
             .filter(|k| !k.is_empty())

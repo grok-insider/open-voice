@@ -103,6 +103,20 @@ impl AudioSpec {
     };
 }
 
+/// Local audio encoding (ffmpeg adapter lives in ov-audio). Used by local
+/// TTS engines that natively emit WAV to serve other output codecs.
+#[async_trait]
+pub trait AudioEncoder: Send + Sync {
+    /// Re-encode a complete in-memory WAV file into `codec` (optionally
+    /// resampling to `sample_rate`).
+    async fn encode_wav(
+        &self,
+        wav: &[u8],
+        codec: crate::domain::AudioCodec,
+        sample_rate: Option<u32>,
+    ) -> CoreResult<Vec<u8>>;
+}
+
 /// Local audio decoding (ffmpeg adapter lives in ov-audio).
 #[async_trait]
 pub trait AudioDecoder: Send + Sync {

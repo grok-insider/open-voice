@@ -14,3 +14,9 @@ pub mod canary;
 
 #[cfg(feature = "canary")]
 pub use canary::CanaryLocalProvider;
+
+#[cfg(feature = "qwen3-tts")]
+pub mod qwen3_tts;
+
+#[cfg(feature = "qwen3-tts")]
+pub use qwen3_tts::Qwen3TtsLocalProvider;

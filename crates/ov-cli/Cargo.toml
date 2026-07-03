@@ -19,9 +19,13 @@ path = "src/main.rs"
 
 [features]
 default = []
-# Local Canary ONNX inference. Off by default so the nix + static-musl builds
-# stay free of ONNX Runtime; enable with `--features local`.
+# Local Canary ONNX inference (STT). Off by default so the static-musl release
+# builds stay free of ONNX Runtime; enable with `--features local`.
 local = ["ov-local/canary"]
+# Local Qwen3-TTS via any-tts/Candle (CPU).
+local-tts = ["ov-local/qwen3-tts"]
+# Candle CUDA kernels for the local TTS engine (needs nvcc at build time).
+local-tts-cuda = ["local-tts", "ov-local/qwen3-tts-cuda"]
 
 [dependencies]
 ov-core = { workspace = true }

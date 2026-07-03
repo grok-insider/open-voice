@@ -50,7 +50,52 @@ pub const CANARY_1B_V2: ModelSpec = ModelSpec {
     description: "NVIDIA Canary 1B v2 (int8 ONNX) — multilingual STT, 25 languages",
 };
 
-pub const ALL_MODELS: &[&ModelSpec] = &[&CANARY_1B_V2];
+/// Qwen3-TTS 12Hz 1.7B CustomVoice — the local TTS engine's model (named
+/// speakers: ryan, serena, vivian, uncle_fu, aiden, ono_anna, sohee, eric,
+/// dylan; 10 languages incl. en/es/ru). No `tokenizer.json` upstream: the
+/// tokenizer is built from `vocab.json` + `merges.txt`. any-tts can also
+/// resolve these files from the shared Hugging Face cache, so fetching into
+/// the open-voice models dir is optional when the HF cache is already warm.
+pub const QWEN3_TTS_CUSTOM_VOICE: ModelSpec = ModelSpec {
+    name: "qwen3-tts",
+    repo: "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+    files: &[
+        file("config.json"),
+        file("generation_config.json"),
+        file("merges.txt"),
+        file("model.safetensors"),
+        file("preprocessor_config.json"),
+        file("speech_tokenizer/config.json"),
+        file("speech_tokenizer/configuration.json"),
+        file("speech_tokenizer/model.safetensors"),
+        file("speech_tokenizer/preprocessor_config.json"),
+        file("tokenizer_config.json"),
+        file("vocab.json"),
+    ],
+    description: "Qwen3-TTS 12Hz 1.7B CustomVoice — local TTS, named voices, 10 languages",
+};
+
+pub const ALL_MODELS: &[&ModelSpec] = &[&CANARY_1B_V2, &QWEN3_TTS_CUSTOM_VOICE];
+
+/// Whether `repo` is already present in the shared Hugging Face hub cache
+/// (`$HF_HOME` or `~/.cache/huggingface`) — any-tts resolves models from
+/// there without re-downloading.
+pub fn hf_cache_present(repo: &str) -> bool {
+    let base = std::env::var_os("HF_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| dirs_cache().map(|c| c.join("huggingface")));
+    let Some(base) = base else { return false };
+    let dir = base
+        .join("hub")
+        .join(format!("models--{}", repo.replace('/', "--")));
+    dir.join("snapshots").is_dir()
+}
+
+fn dirs_cache() -> Option<std::path::PathBuf> {
+    std::env::var_os("XDG_CACHE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")))
+}
 
 pub fn find(name: &str) -> Option<&'static ModelSpec> {
     ALL_MODELS.iter().copied().find(|m| m.name == name)
@@ -97,6 +142,11 @@ impl ModelSpec {
 
         for file in self.files {
             let target = dir.join(file.name);
+            if let Some(parent) = target.parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| CoreError::Io(format!("creating {}: {e}", parent.display())))?;
+            }
             if std::fs::metadata(&target)
                 .map(|m| m.is_file() && m.len() > 0)
                 .unwrap_or(false)

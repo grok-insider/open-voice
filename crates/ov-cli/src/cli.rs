@@ -425,14 +425,14 @@ fn providers_list(config: &Config) -> anyhow::Result<()> {
         let configured = composition.configured.contains(&id);
         let status = if configured {
             "ready"
-        } else if id == ProviderId::LocalCanary {
-            if !compose::local_canary_compiled() {
-                "not compiled"
-            } else {
-                "no model"
-            }
         } else {
-            "no api key"
+            match id {
+                ProviderId::LocalCanary if !compose::local_canary_compiled() => "not compiled",
+                ProviderId::LocalCanary => "no model",
+                ProviderId::LocalQwen3 if !compose::local_qwen3_compiled() => "not compiled",
+                ProviderId::LocalQwen3 => "no model",
+                _ => "no api key",
+            }
         };
         let caps = capability_summary(config, id);
         println!("{:<14} {:<12} {}", id.to_string(), status, caps);
@@ -445,6 +445,9 @@ fn capability_summary(config: &Config, id: ProviderId) -> String {
     let caps = match id {
         ProviderId::LocalCanary => {
             return "stt (local, 25 languages, offline)".to_string();
+        }
+        ProviderId::LocalQwen3 => {
+            return "tts (local, named voices, 10 languages, offline)".to_string();
         }
         ProviderId::Openai => ov_providers::OpenAiProvider::new(
             "-",
@@ -513,6 +516,16 @@ fn providers_doctor(config: &Config) -> anyhow::Result<()> {
                     }
                 );
             }
+            ProviderId::LocalQwen3 => {
+                println!("local-qwen3:");
+                println!("  compiled: {}", compose::local_qwen3_compiled());
+                let source = match compose::local_qwen3_source(config) {
+                    Some(compose::Qwen3Source::Dir(dir)) => format!("dir: {}", dir.display()),
+                    Some(compose::Qwen3Source::HfCache) => "huggingface cache (shared)".to_string(),
+                    None => "missing (run: openvoice models fetch qwen3-tts)".to_string(),
+                };
+                println!("  model: {source}");
+            }
             _ => {
                 let (env_name, key) = match id {
                     ProviderId::Openai => (
@@ -530,7 +543,7 @@ fn providers_doctor(config: &Config) -> anyhow::Result<()> {
                     ProviderId::Xai => {
                         (config.providers.xai.api_key_env.clone(), config.api_key(id))
                     }
-                    ProviderId::LocalCanary => unreachable!(),
+                    ProviderId::LocalCanary | ProviderId::LocalQwen3 => unreachable!(),
                 };
                 println!("{id}:");
                 println!(
@@ -578,9 +591,14 @@ async fn models_fetch(config: &Config, name: &str) -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!(e.to_string()))?;
     println!("{}", dir.display());
-    if !compose::local_canary_compiled() {
+    let (compiled, feature) = if model.name == "qwen3-tts" {
+        (compose::local_qwen3_compiled(), "local-tts")
+    } else {
+        (compose::local_canary_compiled(), "local")
+    };
+    if !compiled {
         eprintln!(
-            "note: this build has no local inference (compile with --features local to use it)"
+            "note: this build cannot run the model (compile with --features {feature} to use it)"
         );
     }
     Ok(())

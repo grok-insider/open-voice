@@ -26,6 +26,7 @@ openvoice models fetch canary-1b-v2
 | Engine | STT | TTS | Streaming | Diarization | Word timestamps | Notes |
 |---|---|---|---|---|---|---|
 | `local-canary` | ✓ | — | — | — | segments | NVIDIA Canary 1B v2 (int8 ONNX), 25 languages, fully offline |
+| `local-qwen3` | — | ✓ | — | — | — | Qwen3-TTS 1.7B CustomVoice (any-tts/Candle), named voices, 10 languages, offline, optional CUDA |
 | `xai` | ✓ | ✓ | ✓ (STT+TTS) | ✓ | ✓ | OGG/Opus native, 500 MB uploads, keyterms, multichannel |
 | `elevenlabs` | ✓ | ✓ | — | ✓ | ✓ | Scribe v2, 5 GB uploads, keyterms |
 | `cartesia` | ✓ | ✓ | — | — | ✓ | ink-whisper STT, sonic TTS (voice id required) |
@@ -98,9 +99,27 @@ openvoice models fetch canary-1b-v2   # ~1 GB from Hugging Face, cached locally
 openvoice transcribe clip.ogg --lang es --provider local-canary
 ```
 
-Local inference is compiled in with `cargo build --features local` (the
-`ort` crate downloads ONNX Runtime at build time, so the Nix package and the
-static release binaries exclude it; `models fetch` works in every build).
+Local STT is compiled in with `cargo build --features local` (the `ort`
+crate downloads ONNX Runtime at build time, so the static release binaries
+exclude it; `models fetch` works in every build). The Nix packages
+`open-voice-local` / `open-voice-local-cuda` include it, linked against
+nixpkgs' ONNX Runtime.
+
+## Local (offline) text-to-speech
+
+```bash
+openvoice models fetch qwen3-tts      # ~3.6 GB (or reuse a warm HF cache)
+openvoice speak "Hola mundo" --lang es --voice serena --provider local-qwen3 --out hola.mp3
+```
+
+Qwen3-TTS-12Hz-1.7B-CustomVoice via [any-tts](https://github.com/TM9657/any-tts)
+(Candle, pure Rust). Named speakers: `ryan`, `serena`, `vivian`, `uncle_fu`,
+`aiden`, `ono_anna`, `sohee`, `eric`, `dylan`; style control via
+`--instructions`. Compiled in with `--features local-tts` (CPU) or
+`local-tts-cuda` (GPU; `CUDA_COMPUTE_CAP` at build time — the
+`open-voice-local-cuda` Nix package defaults to sm_120). Model files resolve
+from an explicit `local.tts_model_dir`, the open-voice models dir, or the
+shared Hugging Face cache — in that order.
 
 ## Architecture
 

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderId {
     LocalCanary,
+    LocalQwen3,
     Openai,
     Elevenlabs,
     Cartesia,
@@ -17,8 +18,9 @@ pub enum ProviderId {
 }
 
 impl ProviderId {
-    pub const ALL: [ProviderId; 5] = [
+    pub const ALL: [ProviderId; 6] = [
         ProviderId::LocalCanary,
+        ProviderId::LocalQwen3,
         ProviderId::Openai,
         ProviderId::Elevenlabs,
         ProviderId::Cartesia,
@@ -28,6 +30,7 @@ impl ProviderId {
     pub fn as_str(&self) -> &'static str {
         match self {
             ProviderId::LocalCanary => "local-canary",
+            ProviderId::LocalQwen3 => "local-qwen3",
             ProviderId::Openai => "openai",
             ProviderId::Elevenlabs => "elevenlabs",
             ProviderId::Cartesia => "cartesia",
@@ -48,12 +51,13 @@ impl FromStr for ProviderId {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.trim().to_ascii_lowercase().as_str() {
             "local-canary" | "local" | "canary" => Ok(ProviderId::LocalCanary),
+            "local-qwen3" | "qwen3" | "qwen3-tts" => Ok(ProviderId::LocalQwen3),
             "openai" | "whisper" => Ok(ProviderId::Openai),
             "elevenlabs" | "11labs" => Ok(ProviderId::Elevenlabs),
             "cartesia" => Ok(ProviderId::Cartesia),
             "xai" | "grok" => Ok(ProviderId::Xai),
             other => Err(format!(
-                "unknown provider '{other}' (expected one of: local-canary, openai, elevenlabs, cartesia, xai)"
+                "unknown provider '{other}' (expected one of: local-canary, local-qwen3, openai, elevenlabs, cartesia, xai)"
             )),
         }
     }

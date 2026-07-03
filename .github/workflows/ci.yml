@@ -60,7 +60,9 @@ jobs:
           # The Microsoft tarball ships shared libraries only; ort-sys
           # defaults to static linking for system libs and fails without this.
           echo "ORT_PREFER_DYNAMIC_LINK=1" >> "$GITHUB_ENV"
-      - run: cargo clippy -p ov-cli --features local --all-targets -- -D warnings
+      # local-tts (any-tts/Candle CPU) rides along; the CUDA feature needs nvcc
+      # and is only built via the flake's open-voice-local-cuda on dev machines.
+      - run: cargo clippy -p ov-cli --features local,local-tts --all-targets -- -D warnings
 
   # On master pushes (plus tags + manual dispatch): build with Nix and push
   # every store path to the grok-insider cachix cache, so NixOS consumers

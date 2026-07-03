@@ -32,10 +32,10 @@ is Spanish quality on real WhatsApp voice notes with correct output naming
 | `crates/ov-audio` | ffmpeg decode/probe/transcode adapter + WAV helpers. | `AudioDecoder` |
 | `crates/ov-output` | txt/srt/vtt/json writers + output-path rules. | — |
 | `crates/ov-config` | Config schema, XDG paths, API-key resolution (env-first). | — |
-| `crates/ov-local` | Local model registry/downloader (always) + Canary ONNX engine (feature `canary`). | `BatchTranscriber` |
+| `crates/ov-local` | Local model registry/downloader (always) + Canary ONNX STT (feature `canary`) + Qwen3-TTS via any-tts/Candle (feature `qwen3-tts`, `qwen3-tts-cuda`). | `BatchTranscriber`, `BatchSpeechSynthesizer` |
 | `crates/ov-providers` | Remote adapters: `openai`, `elevenlabs`, `cartesia`, `xai` (xAI also streams over WebSocket). | `BatchTranscriber`, `BatchSpeechSynthesizer`, `StreamingTranscriber`, `StreamingSpeechSynthesizer` |
 | `crates/ov-engine` | Use-cases: provider selection, capability validation, auto-transcode, `auto` fallback chains. **Depends only on `ov-core`.** | — (consumes ports) |
-| `crates/ov-cli` | The `openvoice` binary: subcommands + the composition root (`compose.rs`). Feature `local` = `ov-local/canary`. | — |
+| `crates/ov-cli` | The `openvoice` binary: subcommands + the composition root (`compose.rs`). Features: `local` (Canary STT), `local-tts` (Qwen3 TTS CPU), `local-tts-cuda`. | — |
 
 ### The dependency rule (do not break this)
 
@@ -52,7 +52,7 @@ ov-cli ──▶ ov-engine ──▶ ov-core ◀── every adapter crate
   other or on `ov-engine`.
 - `ov-cli::compose` is the only place that names concrete adapters, in `auto`
   preference order (STT: local-canary → xai → elevenlabs → cartesia → openai;
-  TTS: xai → elevenlabs → cartesia → openai).
+  TTS: local-qwen3 → xai → elevenlabs → cartesia → openai).
 
 ## Coding standards
 
@@ -88,6 +88,15 @@ ov-cli ──▶ ov-engine ──▶ ov-core ◀── every adapter crate
   `istupakov/canary-1b-v2-onnx`; the `ort` build script downloads ONNX Runtime
   at build time (hence feature-gated off default builds; devshell provides
   pkg-config + openssl for it).
+- **Local Qwen3-TTS:** `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` via any-tts
+  (Candle). Speaker ids are lowercase (`ryan`, not `Ryan`); language tags map
+  ISO → names (`es` → `Spanish`); the model natively emits 24 kHz WAV and
+  other codecs go through the `AudioEncoder` port (ffmpeg). The 0.6B
+  checkpoint does NOT load (any-tts shape mismatch) — stay on 1.7B. Model
+  resolution: explicit dir → open-voice models dir → shared HF cache. CUDA:
+  build with `CUDA_COMPUTE_CAP` + toolkit stubs for `-lcuda`, run with
+  `/run/opengl-driver/lib` on LD_LIBRARY_PATH (flake handles both); the CUDA
+  package is not built in CI — push it to cachix from a dev machine.
 
 ## Commands
 

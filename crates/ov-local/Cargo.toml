@@ -16,6 +16,11 @@ default = []
 # and the static-musl release lane can't do. Enable with
 # `--features ov-local/canary` (CI checks it compiles on ubuntu).
 canary = ["dep:transcribe-rs"]
+# Qwen3-TTS 1.7B CustomVoice via any-tts/Candle (pure Rust, CPU).
+qwen3-tts = ["dep:any-tts", "dep:tracing"]
+# Candle CUDA kernels for the Qwen3 engine (needs nvcc + CUDA_COMPUTE_CAP at
+# build time; see flake.nix's open-voice-local-cuda).
+qwen3-tts-cuda = ["qwen3-tts", "any-tts/cuda"]
 
 [dependencies]
 ov-core = { workspace = true }
@@ -23,7 +28,9 @@ async-trait = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }
 futures-util = { workspace = true }
+tracing = { workspace = true, optional = true }
 transcribe-rs = { version = "0.3", features = ["onnx"], optional = true }
+any-tts = { version = "0.1.2", default-features = false, features = ["qwen3-tts", "download"], optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
