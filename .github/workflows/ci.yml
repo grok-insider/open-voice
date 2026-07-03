@@ -31,11 +31,13 @@ jobs:
       - run: cargo test --workspace
 
   # The `local` (ONNX/Canary) feature is excluded from the default build; make
-  # sure it keeps compiling. Not a required check (ort-sys downloads ONNX
-  # Runtime binaries, so it's network-dependent).
+  # sure it keeps compiling. Advisory only: ort-sys downloads ONNX Runtime
+  # binaries from cdn.pyke.io at build time, which intermittently 403s from
+  # GitHub-hosted runner IPs — never make this job required.
   local-feature:
     name: check --features local
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
