@@ -98,5 +98,8 @@ jobs:
       - name: Build open-voice
         run: nix build .#packages.${{ matrix.system }}.default -L
 
+      - name: Build open-voice-local
+        run: nix build .#packages.${{ matrix.system }}.open-voice-local -L
+
       - name: Flake check
         run: nix flake check -L

@@ -7,7 +7,20 @@ mod compose;
 
 use clap::Parser;
 
+/// Restore default SIGPIPE behavior so `openvoice ... | head` exits quietly
+/// instead of panicking with "failed printing to stdout: Broken pipe".
+#[cfg(unix)]
+fn reset_sigpipe() {
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
+#[cfg(not(unix))]
+fn reset_sigpipe() {}
+
 fn main() -> anyhow::Result<()> {
+    reset_sigpipe();
     let args = cli::Cli::parse();
     let filter = if args.verbose { "debug" } else { "warn" };
     tracing_subscriber::fmt()

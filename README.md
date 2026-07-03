@@ -47,6 +47,8 @@ Nix (binaries come prebuilt from the `grok-insider` cachix cache):
 
 ```bash
 nix run github:grok-insider/open-voice -- providers list
+# With local (offline) Canary STT compiled in, linked against nixpkgs' ONNX Runtime:
+nix run github:grok-insider/open-voice#open-voice-local -- providers list
 ```
 
 Home Manager:

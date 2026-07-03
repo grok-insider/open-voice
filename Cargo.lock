@@ -1201,6 +1201,7 @@ dependencies = [
  "clap",
  "futures",
  "futures-util",
+ "libc",
  "ov-audio",
  "ov-config",
  "ov-core",

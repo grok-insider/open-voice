@@ -24,47 +24,70 @@
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = lib.genAttrs systems;
 
-      packageFor = system:
+      # One builder for both variants:
+      #   * open-voice        — default features, remote providers only. Light,
+      #                         no ONNX Runtime in the closure.
+      #   * open-voice-local  — adds the `local` cargo feature (Canary 1B v2
+      #                         STT via ONNX Runtime). `ort-sys` normally
+      #                         downloads ONNX Runtime binaries at build time,
+      #                         which the Nix sandbox forbids — so we link
+      #                         against nixpkgs' onnxruntime instead
+      #                         (ORT_LIB_LOCATION + ORT_PREFER_DYNAMIC_LINK,
+      #                         the same mechanism ci.yml uses) and put its lib
+      #                         dir on the wrapper's LD_LIBRARY_PATH.
+      packageFor = system: { local }:
         let
           pkgs = import nixpkgs { inherit system; };
           version = (lib.importTOML ./Cargo.toml).workspace.package.version;
         in
-        pkgs.rustPlatform.buildRustPackage {
-          pname = "open-voice";
-          inherit version;
-          src = ./.;
+        pkgs.rustPlatform.buildRustPackage (
+          {
+            pname = if local then "open-voice-local" else "open-voice";
+            inherit version;
+            src = ./.;
 
-          cargoLock.lockFile = ./Cargo.lock;
+            cargoLock.lockFile = ./Cargo.lock;
 
-          # Default features only: the `local` ONNX feature is excluded here
-          # because `ort-sys` downloads ONNX Runtime binaries at build time,
-          # which the Nix sandbox forbids. Local inference users build with
-          # `cargo build --features local` (see README).
-          cargoBuildFlags = [ "-p" "ov-cli" ];
-          cargoTestFlags = [ "--workspace" ];
+            cargoBuildFlags = [ "-p" "ov-cli" ] ++ lib.optionals local [ "--features" "local" ];
+            cargoTestFlags = [ "--workspace" ];
 
-          # TLS is rustls end-to-end; ring only needs the stdenv C compiler.
-          nativeBuildInputs = [ pkgs.makeBinaryWrapper ];
+            # TLS is rustls end-to-end; ring only needs the stdenv C compiler.
+            # The local variant additionally needs pkg-config + openssl at
+            # BUILD time only: ort-sys' build script compiles ureq/native-tls
+            # (its downloader) even when ORT_LIB_LOCATION means it never runs.
+            nativeBuildInputs = [ pkgs.makeBinaryWrapper ]
+              ++ lib.optionals local [ pkgs.pkg-config ];
+            buildInputs = lib.optionals local [ pkgs.openssl ];
 
-          # ffmpeg powers decode/probe/transcode at runtime.
-          postFixup = ''
-            wrapProgram "$out/bin/openvoice" \
-              --prefix PATH : "${lib.makeBinPath [ pkgs.ffmpeg ]}"
-          '';
+            # ffmpeg powers decode/probe/transcode at runtime; the local build
+            # also needs libonnxruntime.so resolvable at runtime.
+            postFixup = ''
+              wrapProgram "$out/bin/openvoice" \
+                --prefix PATH : "${lib.makeBinPath [ pkgs.ffmpeg ]}" ${lib.optionalString local ''\
+                --prefix LD_LIBRARY_PATH : "${pkgs.onnxruntime}/lib"''}
+            '';
 
-          meta = {
-            description = "Agnostic speech-to-text + text-to-speech CLI (openvoice)";
-            homepage = "https://github.com/grok-insider/open-voice";
-            license = lib.licenses.mit;
-            mainProgram = "openvoice";
-            platforms = systems;
-          };
-        };
+            meta = {
+              description = "Agnostic speech-to-text + text-to-speech CLI (openvoice)"
+                + lib.optionalString local " with local ONNX inference";
+              homepage = "https://github.com/grok-insider/open-voice";
+              license = lib.licenses.mit;
+              mainProgram = "openvoice";
+              platforms = systems;
+            };
+          }
+          // lib.optionalAttrs local {
+            # ort-sys: link the system ONNX Runtime instead of downloading.
+            ORT_LIB_LOCATION = "${pkgs.onnxruntime}/lib";
+            ORT_PREFER_DYNAMIC_LINK = "1";
+          }
+        );
     in
     {
       packages = forAllSystems (system: rec {
-        default = packageFor system;
+        default = packageFor system { local = false; };
         open-voice = default;
+        open-voice-local = packageFor system { local = true; };
       });
 
       apps = forAllSystems (system: {
