@@ -7,7 +7,11 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 description = "open-voice CLI (openvoice): agnostic speech-to-text + text-to-speech"
-publish = false
+# No `publish = false` here: release-plz only tags/releases packages that
+# cargo-metadata reports as publishable, so setting it would make `release-plz
+# release` see "nothing to release" (the v0.1.0 lesson). crates.io publishing
+# is prevented by `publish = false` + `git_only` in release-plz.toml instead,
+# matching open-sessionbar/open-subtitle/open-recorder.
 
 [[bin]]
 name = "openvoice"
