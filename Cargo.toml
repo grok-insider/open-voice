@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT"
@@ -23,13 +23,13 @@ repository = "https://github.com/grok-insider/open-voice"
 # Internal crates. Path deps carry an explicit `version` so release-plz's
 # `cargo package` step never fails with "dependency does not specify a version"
 # (see the org AGENTS.md release gotchas).
-ov-core = { path = "crates/ov-core", version = "0.1.0" }
-ov-audio = { path = "crates/ov-audio", version = "0.1.0" }
-ov-output = { path = "crates/ov-output", version = "0.1.0" }
-ov-config = { path = "crates/ov-config", version = "0.1.0" }
-ov-local = { path = "crates/ov-local", version = "0.1.0" }
-ov-providers = { path = "crates/ov-providers", version = "0.1.0" }
-ov-engine = { path = "crates/ov-engine", version = "0.1.0" }
+ov-core = { path = "crates/ov-core", version = "0.1.1" }
+ov-audio = { path = "crates/ov-audio", version = "0.1.1" }
+ov-output = { path = "crates/ov-output", version = "0.1.1" }
+ov-config = { path = "crates/ov-config", version = "0.1.1" }
+ov-local = { path = "crates/ov-local", version = "0.1.1" }
+ov-providers = { path = "crates/ov-providers", version = "0.1.1" }
+ov-engine = { path = "crates/ov-engine", version = "0.1.1" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

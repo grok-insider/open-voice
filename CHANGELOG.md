@@ -4,6 +4,10 @@ All notable, user-facing changes to open-voice are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-07-03
+
+- Added Nix flake package `open-voice-local` for building the CLI with the on-device Canary STT engine.
+
 ## 0.1.0
 
 - Added initial open-voice workspace with agnostic STT/TTS support for OpenAI, ElevenLabs, Cartesia, and xAI providers
