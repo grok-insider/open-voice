@@ -4,6 +4,14 @@ All notable, user-facing changes to open-voice are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-07-03
+
+- Added local Qwen3-TTS engine with named speakers (ryan, serena, vivian, etc.), instruct-style control, and 10 language support including English, Spanish, and Russian
+- Added automatic model resolution that checks local directory, open-voice models directory, and Hugging Face cache
+- Added CUDA support for Qwen3-TTS with dedicated build feature and flake variant
+- Added AudioEncoder port with ffmpeg adapter for re-encoding non-WAV output formats
+- Changed TTS auto chain to prioritize the new local Qwen3 engine first
+
 ## [0.1.1] - 2026-07-03
 
 - Added Nix flake package `open-voice-local` for building the CLI with the on-device Canary STT engine.
