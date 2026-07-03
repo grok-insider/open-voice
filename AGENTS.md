@@ -117,12 +117,20 @@ openvoice stream stt clip.ogg --lang es --interim
   PR; a non-required job checks `--features local` still compiles; on
   master/tags it `nix build`s (x86_64 + aarch64) and pushes to the
   `grok-insider` cachix cache.
-- **Releases** (`.github/workflows/release.yml` + `release-plz.toml`):
-  release-plz keeps a release PR updated (single workspace version driven by
-  `ov-cli`; `git_only` + `publish = false`, no crates.io). Merging it tags
-  `vX.Y.Z`, creates the GitHub Release, and a cross-platform matrix attaches
-  static-musl Linux, macOS, and Windows `openvoice` binaries (default
+- **Releases** (`.github/workflows/release.yml` + `release-plz.toml`),
+  open-recorder's model: a **hand-rolled** `release-pr` job keeps a patch-line
+  release PR updated (version bump + Cargo.lock + AI changelog) — NOT
+  `release-plz release-pr`, whose `cargo package` change detection can't
+  resolve our unpublished internal path deps against crates.io. Deliberate
+  minor/major bumps go through `manual-version-bump.yml`. Merging a release PR
+  lands an untagged version; `release-plz release` (`release_always = true`)
+  then tags `vX.Y.Z`, creates the GitHub Release, and a cross-platform matrix
+  attaches static-musl Linux, macOS, and Windows `openvoice` binaries (default
   features — no ONNX in release artifacts).
+- Two release gotchas learned cutting v0.1.0 (do not regress): `ov-cli`'s
+  Cargo manifest must NOT set `publish = false` (release-plz would skip its
+  git release — "nothing to release"), and the crates.io guard lives in
+  `release-plz.toml` instead.
 - Required repo secrets: `RELEASE_PLZ_TOKEN`, `OPENROUTER_API_KEY`,
   `CACHIX_AUTH_TOKEN`.
 
