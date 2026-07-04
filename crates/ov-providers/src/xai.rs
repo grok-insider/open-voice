@@ -549,14 +549,16 @@ impl XaiProvider {
             }
         }
 
+        let text = if let Some(text) = transcript_done {
+            text
+        } else if transcript_delta.is_empty() {
+            text_delta
+        } else {
+            transcript_delta
+        };
+
         Ok(RealtimeAgentTurn {
-            text: transcript_done.unwrap_or_else(|| {
-                if transcript_delta.is_empty() {
-                    text_delta
-                } else {
-                    transcript_delta
-                }
-            }),
+            text,
             audio,
             audio_mime: output_mime,
             audio_codec: request.output_codec,

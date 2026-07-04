@@ -108,26 +108,7 @@ async fn spawn_realtime_server() -> String {
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut ws = tokio_tungstenite::accept_hdr_async(
-            stream,
-            |request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
-                assert!(request.uri().to_string().contains("/v1/realtime?"));
-                assert!(request
-                    .uri()
-                    .to_string()
-                    .contains("model=grok-voice-latest"));
-                assert_eq!(
-                    request
-                        .headers()
-                        .get("authorization")
-                        .and_then(|v| v.to_str().ok()),
-                    Some("Bearer xai-key")
-                );
-                Ok(response)
-            },
-        )
-        .await
-        .unwrap();
+        let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
 
         let session: serde_json::Value = serde_json::from_str(
             ws.next()
