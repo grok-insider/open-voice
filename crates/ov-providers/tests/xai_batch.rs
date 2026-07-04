@@ -3,7 +3,7 @@
 use ov_core::domain::{AudioCodec, AudioSource, SpeechRequest, TranscribeRequest};
 use ov_core::ports::{BatchSpeechSynthesizer, BatchTranscriber, Provider};
 use ov_core::{CoreError, ProviderId};
-use ov_providers::{XaiProvider, XaiSettings};
+use ov_providers::{CustomVoiceCreateRequest, CustomVoiceUpdateRequest, XaiProvider, XaiSettings};
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
@@ -122,4 +122,119 @@ fn capabilities_are_full_featured() {
     assert!(caps.diarization && caps.keyterms && caps.multichannel);
     assert!(caps.accepts_extension("ogg"));
     assert_eq!(caps.max_upload_bytes, Some(500 * 1024 * 1024));
+}
+
+#[tokio::test]
+async fn custom_voices_list_and_get() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/custom-voices"))
+        .and(header("authorization", "Bearer xai-key"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "voices": [{
+                "voice_id": "abc123xy",
+                "name": "Narrator",
+                "language": "en",
+                "tone": "warm"
+            }],
+            "pagination_token": "next"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/custom-voices/abc123xy"))
+        .and(header("authorization", "Bearer xai-key"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "voice_id": "abc123xy",
+            "name": "Narrator",
+            "description": "Warm narration"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let provider = provider(server.uri());
+    let list = provider.list_custom_voices(Some(50), None).await.unwrap();
+    assert_eq!(list.voices[0].voice_id, "abc123xy");
+    assert_eq!(list.pagination_token.as_deref(), Some("next"));
+
+    let voice = provider.get_custom_voice("abc123xy").await.unwrap();
+    assert_eq!(voice.name.as_deref(), Some("Narrator"));
+}
+
+#[tokio::test]
+async fn custom_voice_create_update_delete() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/custom-voices"))
+        .and(header("authorization", "Bearer xai-key"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "voice_id": "abc123xy",
+            "name": "Narrator",
+            "language": "en"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path("/v1/custom-voices/abc123xy"))
+        .and(header("authorization", "Bearer xai-key"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "voice_id": "abc123xy",
+            "name": "Narrator 2",
+            "tone": "calm"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/v1/custom-voices/abc123xy"))
+        .and(header("authorization", "Bearer xai-key"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "deleted": true
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let provider = provider(server.uri());
+    let created = provider
+        .create_custom_voice(CustomVoiceCreateRequest {
+            file: source(),
+            name: "Narrator".into(),
+            description: Some("Warm narration".into()),
+            gender: Some("female".into()),
+            accent: None,
+            age: None,
+            language: Some("en".into()),
+            use_case: Some("narration".into()),
+            tone: Some("warm".into()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(created.voice_id, "abc123xy");
+
+    let updated = provider
+        .update_custom_voice(
+            "abc123xy",
+            CustomVoiceUpdateRequest {
+                name: Some("Narrator 2".into()),
+                tone: Some("calm".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.name.as_deref(), Some("Narrator 2"));
+
+    assert!(provider.delete_custom_voice("abc123xy").await.unwrap());
+
+    let received: Vec<Request> = server.received_requests().await.unwrap();
+    let create_body = String::from_utf8_lossy(&received[0].body);
+    assert!(create_body.contains("name=\"name\""));
+    assert!(create_body.contains("name=\"file\""));
+    let update_body: serde_json::Value = serde_json::from_slice(&received[1].body).unwrap();
+    assert_eq!(update_body["name"], "Narrator 2");
+    assert_eq!(update_body["tone"], "calm");
 }

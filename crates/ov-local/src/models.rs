@@ -75,6 +75,18 @@ pub const QWEN3_TTS_CUSTOM_VOICE: ModelSpec = ModelSpec {
     description: "Qwen3-TTS 12Hz 1.7B CustomVoice — local TTS, named voices, 10 languages",
 };
 
+pub const QWEN3_TTS_VOICES: &[(&str, &str)] = &[
+    ("ryan", "male, clear and conversational"),
+    ("serena", "female, warm and polished"),
+    ("vivian", "female, expressive and bright"),
+    ("uncle_fu", "male, older and characterful"),
+    ("aiden", "male, youthful and casual"),
+    ("ono_anna", "female, Japanese voice"),
+    ("sohee", "female, Korean voice"),
+    ("eric", "male, balanced narrator"),
+    ("dylan", "male, energetic narrator"),
+];
+
 pub const ALL_MODELS: &[&ModelSpec] = &[&CANARY_1B_V2, &QWEN3_TTS_CUSTOM_VOICE];
 
 /// Whether `repo` is already present in the shared Hugging Face hub cache

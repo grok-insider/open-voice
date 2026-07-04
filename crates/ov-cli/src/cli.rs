@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use anyhow::{bail, Context};
-use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell as CompletionShell;
 use futures_util::StreamExt;
 use ov_config::Config;
@@ -53,6 +53,11 @@ pub enum Command {
     Models {
         #[command(subcommand)]
         command: ModelsCommand,
+    },
+    /// Discover and manage TTS voices.
+    Voices {
+        #[command(subcommand)]
+        command: VoicesCommand,
     },
     /// Generate shell completions.
     Completions {
@@ -198,6 +203,96 @@ pub enum ModelsCommand {
     Remove { name: String },
 }
 
+#[derive(Subcommand)]
+pub enum VoicesCommand {
+    /// List local and xAI voices.
+    List(VoicesListArgs),
+    /// Get one xAI custom voice by id.
+    Get { id: String },
+    /// Clone a voice from a reference audio file using xAI Custom Voices.
+    Clone(VoiceCloneArgs),
+    /// Update xAI custom voice metadata.
+    Update(VoiceUpdateArgs),
+    /// Delete an xAI custom voice.
+    Delete {
+        id: String,
+        /// Delete without an interactive confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum VoiceProviderFilter {
+    All,
+    Local,
+    Xai,
+}
+
+#[derive(Args)]
+pub struct VoicesListArgs {
+    /// Voice source to list.
+    #[arg(long, value_enum, default_value_t = VoiceProviderFilter::All)]
+    pub provider: VoiceProviderFilter,
+    /// Only show xAI custom voices.
+    #[arg(long)]
+    pub custom_only: bool,
+    /// Emit JSON instead of a table.
+    #[arg(long)]
+    pub json: bool,
+    /// xAI custom voice page size.
+    #[arg(long, default_value_t = 50)]
+    pub limit: u32,
+    /// xAI custom voice pagination token.
+    #[arg(long)]
+    pub page_token: Option<String>,
+}
+
+#[derive(Args)]
+pub struct VoiceCloneArgs {
+    /// Reference audio file (max 120 seconds per xAI docs).
+    #[arg(long)]
+    pub file: PathBuf,
+    /// Display name for the custom voice.
+    #[arg(long)]
+    pub name: String,
+    #[arg(long)]
+    pub description: Option<String>,
+    #[arg(long)]
+    pub gender: Option<String>,
+    #[arg(long)]
+    pub accent: Option<String>,
+    #[arg(long)]
+    pub age: Option<String>,
+    #[arg(long)]
+    pub language: Option<String>,
+    #[arg(long)]
+    pub use_case: Option<String>,
+    #[arg(long)]
+    pub tone: Option<String>,
+}
+
+#[derive(Args)]
+pub struct VoiceUpdateArgs {
+    pub id: String,
+    #[arg(long)]
+    pub name: Option<String>,
+    #[arg(long)]
+    pub description: Option<String>,
+    #[arg(long)]
+    pub gender: Option<String>,
+    #[arg(long)]
+    pub accent: Option<String>,
+    #[arg(long)]
+    pub age: Option<String>,
+    #[arg(long)]
+    pub language: Option<String>,
+    #[arg(long)]
+    pub use_case: Option<String>,
+    #[arg(long)]
+    pub tone: Option<String>,
+}
+
 fn parse_provider(value: Option<&str>, config_default: &str) -> anyhow::Result<Option<ProviderId>> {
     let raw = value.unwrap_or(config_default).trim();
     if raw.is_empty() || raw.eq_ignore_ascii_case("auto") {
@@ -238,6 +333,7 @@ pub async fn run(args: Cli) -> anyhow::Result<()> {
             ModelsCommand::Fetch { name } => models_fetch(&config, &name).await,
             ModelsCommand::Remove { name } => models_remove(&config, &name),
         },
+        Command::Voices { command } => voices(&config, command).await,
         Command::Completions { shell } => completions(shell),
     }
 }
@@ -592,6 +688,182 @@ fn completions(shell: CompletionShell) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+struct VoiceRow {
+    provider: String,
+    id: String,
+    name: String,
+    kind: String,
+    description: String,
+}
+
+async fn voices(config: &Config, command: VoicesCommand) -> anyhow::Result<()> {
+    match command {
+        VoicesCommand::List(args) => voices_list(config, args).await,
+        VoicesCommand::Get { id } => {
+            let provider = xai_provider(config)?;
+            let voice = provider.get_custom_voice(&id).await?;
+            println!("{}", serde_json::to_string_pretty(&voice)?);
+            Ok(())
+        }
+        VoicesCommand::Clone(args) => {
+            if !args.file.is_file() {
+                bail!("reference audio '{}' is not readable", args.file.display());
+            }
+            let provider = xai_provider(config)?;
+            let voice = provider
+                .create_custom_voice(ov_providers::CustomVoiceCreateRequest {
+                    file: AudioSource::File(args.file),
+                    name: args.name,
+                    description: args.description,
+                    gender: args.gender,
+                    accent: args.accent,
+                    age: args.age,
+                    language: args.language,
+                    use_case: args.use_case,
+                    tone: args.tone,
+                })
+                .await?;
+            println!("{}", serde_json::to_string_pretty(&voice)?);
+            Ok(())
+        }
+        VoicesCommand::Update(args) => {
+            let provider = xai_provider(config)?;
+            let voice = provider
+                .update_custom_voice(
+                    &args.id,
+                    ov_providers::CustomVoiceUpdateRequest {
+                        name: args.name,
+                        description: args.description,
+                        gender: args.gender,
+                        accent: args.accent,
+                        age: args.age,
+                        language: args.language,
+                        use_case: args.use_case,
+                        tone: args.tone,
+                    },
+                )
+                .await?;
+            println!("{}", serde_json::to_string_pretty(&voice)?);
+            Ok(())
+        }
+        VoicesCommand::Delete { id, yes } => {
+            if !yes {
+                bail!("refusing to delete custom voice '{id}' without --yes");
+            }
+            let provider = xai_provider(config)?;
+            let deleted = provider.delete_custom_voice(&id).await?;
+            println!(
+                "{}",
+                serde_json::json!({ "voice_id": id, "deleted": deleted })
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn voices_list(config: &Config, args: VoicesListArgs) -> anyhow::Result<()> {
+    let mut rows = Vec::new();
+    if !args.custom_only
+        && matches!(
+            args.provider,
+            VoiceProviderFilter::All | VoiceProviderFilter::Local
+        )
+    {
+        for (id, description) in ov_local::models::QWEN3_TTS_VOICES {
+            rows.push(VoiceRow {
+                provider: "local-qwen3".into(),
+                id: (*id).into(),
+                name: (*id).into(),
+                kind: "built-in".into(),
+                description: (*description).into(),
+            });
+        }
+    }
+    if !args.custom_only
+        && matches!(
+            args.provider,
+            VoiceProviderFilter::All | VoiceProviderFilter::Xai
+        )
+    {
+        for (id, name, description) in ov_providers::XAI_BUILT_IN_VOICES {
+            rows.push(VoiceRow {
+                provider: "xai".into(),
+                id: (*id).into(),
+                name: (*name).into(),
+                kind: "built-in".into(),
+                description: (*description).into(),
+            });
+        }
+    }
+    if matches!(
+        args.provider,
+        VoiceProviderFilter::All | VoiceProviderFilter::Xai
+    ) {
+        if let Some(provider) = maybe_xai_provider(config) {
+            let custom = provider
+                .list_custom_voices(Some(args.limit), args.page_token.as_deref())
+                .await?;
+            for voice in custom.voices {
+                rows.push(VoiceRow {
+                    provider: "xai".into(),
+                    id: voice.voice_id,
+                    name: voice.name.unwrap_or_default(),
+                    kind: "custom".into(),
+                    description: voice
+                        .description
+                        .or(voice.tone)
+                        .or(voice.use_case)
+                        .unwrap_or_default(),
+                });
+            }
+            if let Some(token) = custom.pagination_token {
+                eprintln!("next page token: {token}");
+            }
+        } else if args.custom_only || args.provider == VoiceProviderFilter::Xai {
+            eprintln!("warn: XAI_API_KEY missing; custom voices are not listed");
+        }
+    }
+
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+        return Ok(());
+    }
+    println!(
+        "{:<14} {:<12} {:<10} {:<18} DESCRIPTION",
+        "PROVIDER", "KIND", "ID", "NAME"
+    );
+    for row in rows {
+        println!(
+            "{:<14} {:<12} {:<10} {:<18} {}",
+            row.provider, row.kind, row.id, row.name, row.description
+        );
+    }
+    Ok(())
+}
+
+fn maybe_xai_provider(config: &Config) -> Option<ov_providers::XaiProvider> {
+    config.api_key(ProviderId::Xai).map(|key| {
+        ov_providers::XaiProvider::new(
+            key,
+            ov_providers::XaiSettings {
+                base_url: config.providers.xai.base_url.clone(),
+                ws_url: config.providers.xai.ws_url.clone(),
+                tts_voice: config.providers.xai.tts_voice.clone(),
+            },
+        )
+    })
+}
+
+fn xai_provider(config: &Config) -> anyhow::Result<ov_providers::XaiProvider> {
+    maybe_xai_provider(config).with_context(|| {
+        format!(
+            "xAI API key missing (export {}=...)",
+            config.providers.xai.api_key_env
+        )
+    })
+}
+
 async fn models_fetch(config: &Config, name: &str) -> anyhow::Result<()> {
     let model = ov_local::models::find(name)
         .with_context(|| format!("unknown model '{name}' (see: openvoice models list)"))?;
@@ -697,6 +969,27 @@ mod tests {
     fn parses_completion_generation() {
         let cli = Cli::try_parse_from(["openvoice", "completions", "zsh"]).unwrap();
         assert!(matches!(cli.command, Command::Completions { .. }));
+    }
+
+    #[test]
+    fn parses_voice_commands() {
+        let cli =
+            Cli::try_parse_from(["openvoice", "voices", "list", "--provider", "xai"]).unwrap();
+        assert!(matches!(cli.command, Command::Voices { .. }));
+
+        let cli = Cli::try_parse_from([
+            "openvoice",
+            "voices",
+            "clone",
+            "--file",
+            "ref.wav",
+            "--name",
+            "Narrator",
+            "--language",
+            "en",
+        ])
+        .unwrap();
+        assert!(matches!(cli.command, Command::Voices { .. }));
     }
 
     #[test]

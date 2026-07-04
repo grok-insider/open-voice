@@ -13,7 +13,8 @@ use base64::Engine as _;
 use futures_util::{SinkExt, StreamExt};
 use ov_core::capabilities::ProviderCapabilities;
 use ov_core::domain::{
-    AudioCodec, AudioOutput, Language, SpeechRequest, TranscribeRequest, Transcript, Word,
+    AudioCodec, AudioOutput, AudioSource, Language, SpeechRequest, TranscribeRequest, Transcript,
+    Word,
 };
 use ov_core::ports::{
     AudioEvent, AudioEventStream, BatchSpeechSynthesizer, BatchTranscriber, Provider,
@@ -21,7 +22,7 @@ use ov_core::ports::{
     TranscriptStream,
 };
 use ov_core::{CoreError, CoreResult, ProviderId};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
@@ -29,6 +30,14 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::http;
 
 pub const MAX_UPLOAD_BYTES: u64 = 500 * 1024 * 1024;
+
+pub const XAI_BUILT_IN_VOICES: &[(&str, &str, &str)] = &[
+    ("eve", "Eve", "Energetic, upbeat"),
+    ("ara", "Ara", "Warm, friendly"),
+    ("rex", "Rex", "Confident, clear"),
+    ("sal", "Sal", "Smooth, balanced"),
+    ("leo", "Leo", "Authoritative, strong"),
+];
 
 #[derive(Debug, Clone)]
 pub struct XaiSettings {
@@ -54,6 +63,71 @@ pub struct XaiProvider {
     settings: XaiSettings,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XaiVoice {
+    #[serde(alias = "id")]
+    pub voice_id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub gender: Option<String>,
+    #[serde(default)]
+    pub accent: Option<String>,
+    #[serde(default)]
+    pub age: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub use_case: Option<String>,
+    #[serde(default)]
+    pub tone: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomVoiceList {
+    #[serde(default)]
+    pub voices: Vec<XaiVoice>,
+    #[serde(default)]
+    pub pagination_token: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CustomVoiceCreateRequest {
+    pub file: AudioSource,
+    pub name: String,
+    pub description: Option<String>,
+    pub gender: Option<String>,
+    pub accent: Option<String>,
+    pub age: Option<String>,
+    pub language: Option<String>,
+    pub use_case: Option<String>,
+    pub tone: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct CustomVoiceUpdateRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gender: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub age: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub use_case: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tone: Option<String>,
+}
+
 impl XaiProvider {
     pub fn new(api_key: impl Into<String>, settings: XaiSettings) -> Self {
         XaiProvider {
@@ -75,6 +149,163 @@ impl XaiProvider {
             .map_err(|_| CoreError::InvalidInput("api key is not a valid header value".into()))?;
         request.headers_mut().insert("Authorization", value);
         Ok(request)
+    }
+
+    pub async fn list_custom_voices(
+        &self,
+        limit: Option<u32>,
+        pagination_token: Option<&str>,
+    ) -> CoreResult<CustomVoiceList> {
+        let mut request = self
+            .client
+            .get(format!("{}/v1/custom-voices", self.settings.base_url))
+            .bearer_auth(&self.api_key);
+        if let Some(limit) = limit {
+            request = request.query(&[("limit", limit.to_string())]);
+        }
+        if let Some(token) = pagination_token {
+            request = request.query(&[("pagination_token", token.to_string())]);
+        }
+        let response = request.send().await.map_err(http::network_err)?;
+        if !response.status().is_success() {
+            return Err(http::error_for("xai", response).await);
+        }
+        response.json().await.map_err(|e| CoreError::Provider {
+            provider: "xai".into(),
+            message: format!("decoding custom voices: {e}"),
+        })
+    }
+
+    pub async fn get_custom_voice(&self, voice_id: &str) -> CoreResult<XaiVoice> {
+        let response = self
+            .client
+            .get(format!(
+                "{}/v1/custom-voices/{voice_id}",
+                self.settings.base_url
+            ))
+            .bearer_auth(&self.api_key)
+            .send()
+            .await
+            .map_err(http::network_err)?;
+        if !response.status().is_success() {
+            return Err(http::error_for("xai", response).await);
+        }
+        response.json().await.map_err(|e| CoreError::Provider {
+            provider: "xai".into(),
+            message: format!("decoding custom voice: {e}"),
+        })
+    }
+
+    pub async fn create_custom_voice(
+        &self,
+        request: CustomVoiceCreateRequest,
+    ) -> CoreResult<XaiVoice> {
+        let (data, file_name, mime) = http::source_parts(&request.file).await?;
+        let file = reqwest::multipart::Part::bytes(data)
+            .file_name(file_name)
+            .mime_str(&mime)
+            .map_err(|e| CoreError::InvalidInput(format!("invalid mime: {e}")))?;
+        let mut form = reqwest::multipart::Form::new().text("name", request.name);
+        form = text_field(form, "description", request.description);
+        form = text_field(form, "gender", request.gender);
+        form = text_field(form, "accent", request.accent);
+        form = text_field(form, "age", request.age);
+        form = text_field(form, "language", request.language);
+        form = text_field(form, "use_case", request.use_case);
+        form = text_field(form, "tone", request.tone);
+        form = form.part("file", file);
+
+        let response = self
+            .client
+            .post(format!("{}/v1/custom-voices", self.settings.base_url))
+            .bearer_auth(&self.api_key)
+            .multipart(form)
+            .send()
+            .await
+            .map_err(http::network_err)?;
+        if !response.status().is_success() {
+            return Err(http::error_for("xai", response).await);
+        }
+        response.json().await.map_err(|e| CoreError::Provider {
+            provider: "xai".into(),
+            message: format!("decoding custom voice: {e}"),
+        })
+    }
+
+    pub async fn update_custom_voice(
+        &self,
+        voice_id: &str,
+        request: CustomVoiceUpdateRequest,
+    ) -> CoreResult<XaiVoice> {
+        let body = serde_json::to_value(request)
+            .map_err(|e| CoreError::InvalidInput(format!("encoding update body: {e}")))?;
+        let empty = body.as_object().map(|o| o.is_empty()).unwrap_or(false);
+        if empty {
+            return Err(CoreError::InvalidInput(
+                "provide at least one field to update".into(),
+            ));
+        }
+        let response = self
+            .client
+            .patch(format!(
+                "{}/v1/custom-voices/{voice_id}",
+                self.settings.base_url
+            ))
+            .bearer_auth(&self.api_key)
+            .json(&body)
+            .send()
+            .await
+            .map_err(http::network_err)?;
+        if !response.status().is_success() {
+            return Err(http::error_for("xai", response).await);
+        }
+        response.json().await.map_err(|e| CoreError::Provider {
+            provider: "xai".into(),
+            message: format!("decoding custom voice: {e}"),
+        })
+    }
+
+    pub async fn delete_custom_voice(&self, voice_id: &str) -> CoreResult<bool> {
+        let response = self
+            .client
+            .delete(format!(
+                "{}/v1/custom-voices/{voice_id}",
+                self.settings.base_url
+            ))
+            .bearer_auth(&self.api_key)
+            .send()
+            .await
+            .map_err(http::network_err)?;
+        if !response.status().is_success() {
+            return Err(http::error_for("xai", response).await);
+        }
+        if response.status().as_u16() == 204 {
+            return Ok(true);
+        }
+        let body = response.text().await.map_err(http::network_err)?;
+        if body.trim().is_empty() {
+            return Ok(true);
+        }
+        let value: serde_json::Value =
+            serde_json::from_str(&body).map_err(|e| CoreError::Provider {
+                provider: "xai".into(),
+                message: format!("decoding delete response: {e}"),
+            })?;
+        Ok(value
+            .get("deleted")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true))
+    }
+}
+
+fn text_field(
+    form: reqwest::multipart::Form,
+    name: &'static str,
+    value: Option<String>,
+) -> reqwest::multipart::Form {
+    match value.filter(|v| !v.trim().is_empty()) {
+        Some(value) => form.text(name, value),
+        None => form,
     }
 }
 

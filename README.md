@@ -11,6 +11,10 @@ openvoice transcribe "WhatsApp Ptt 2026-07-02 at 14.56.03.ogg" --lang es --forma
 # Text-to-speech
 openvoice speak "Hola mundo" --lang es --out hola.mp3
 
+# Voice discovery + xAI Custom Voices
+openvoice voices list
+openvoice voices clone --file reference.wav --name "Brand narrator" --language en
+
 # Realtime (xAI WebSocket)
 openvoice stream stt clip.ogg --lang es --interim
 openvoice stream tts "Hola mundo" --lang es --out hola.mp3
@@ -123,6 +127,20 @@ Qwen3-TTS-12Hz-1.7B-CustomVoice via [any-tts](https://github.com/TM9657/any-tts)
 `open-voice-local-cuda` Nix package defaults to sm_120). Model files resolve
 from an explicit `local.tts_model_dir`, the open-voice models dir, or the
 shared Hugging Face cache — in that order.
+
+## xAI Custom Voices
+
+```bash
+export XAI_API_KEY=...
+openvoice voices list --provider xai
+openvoice voices clone --file reference.wav --name "Support voice" --language en --tone warm
+openvoice speak "Hello from our cloned voice" --provider xai --voice <voice_id> --out hello.mp3
+openvoice voices delete <voice_id> --yes
+```
+
+Custom voice IDs returned by xAI are used with `--voice`, the same as built-in
+voices (`eve`, `ara`, `rex`, `sal`, `leo`). xAI currently limits reference
+audio to 120 seconds and custom voices to 30 per team.
 
 ## Architecture
 

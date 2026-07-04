@@ -14,4 +14,7 @@ pub mod xai;
 pub use cartesia::{CartesiaProvider, CartesiaSettings};
 pub use elevenlabs::{ElevenLabsProvider, ElevenLabsSettings};
 pub use openai::{OpenAiProvider, OpenAiSettings};
-pub use xai::{XaiProvider, XaiSettings};
+pub use xai::{
+    CustomVoiceCreateRequest, CustomVoiceList, CustomVoiceUpdateRequest, XaiProvider, XaiSettings,
+    XaiVoice, XAI_BUILT_IN_VOICES,
+};

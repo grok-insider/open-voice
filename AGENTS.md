@@ -76,6 +76,10 @@ ov-cli ──▶ ov-engine ──▶ ov-core ◀── every adapter crate
 
 - **xAI STT multipart:** the `file` field must be the **last** multipart field
   (tested in `tests/xai_batch.rs` — keep it that way).
+- **xAI Custom Voices:** CRUD lives under `/v1/custom-voices`; the returned
+  `voice_id` is used anywhere a normal xAI `voice_id` works. Creation is
+  multipart with metadata fields before the `file` part. Reference clips are
+  capped at 120s and teams are capped at 30 custom voices.
 - **OpenAI:** only `whisper-1` yields verbose_json + word/segment timestamps;
   OGG isn't in its accepted-extension list, so the engine transcodes OGG to
   WAV first (25 MB cap validated before upload).
