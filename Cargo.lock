@@ -2103,6 +2103,7 @@ dependencies = [
  "ov-providers",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

@@ -64,6 +64,12 @@ pub enum Command {
         /// Shell to generate completions for.
         shell: CompletionShell,
     },
+    /// Run opt-in end-to-end smoke checks.
+    Smoke {
+        /// Smoke target to exercise.
+        #[arg(value_enum)]
+        target: SmokeTarget,
+    },
 }
 
 #[derive(Args)]
@@ -143,6 +149,15 @@ pub struct SpeakArgs {
     /// Style instructions (providers that support it).
     #[arg(long)]
     pub instructions: Option<String>,
+    /// Split long text into chunks, synthesize each chunk, and stitch audio.
+    #[arg(long)]
+    pub long: bool,
+    /// Approximate max characters per long-form chunk.
+    #[arg(long, default_value_t = 1200)]
+    pub chunk_chars: usize,
+    /// Write long-form chunk metadata to this JSON file.
+    #[arg(long)]
+    pub manifest: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -247,6 +262,12 @@ pub enum VoicesCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum VoiceProviderFilter {
     All,
+    Local,
+    Xai,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SmokeTarget {
     Local,
     Xai,
 }
@@ -357,6 +378,7 @@ pub async fn run(args: Cli) -> anyhow::Result<()> {
         },
         Command::Voices { command } => voices(&config, command).await,
         Command::Completions { shell } => completions(shell),
+        Command::Smoke { target } => smoke(&config, target).await,
     }
 }
 
@@ -415,18 +437,19 @@ async fn speak(config: &Config, args: SpeakArgs) -> anyhow::Result<()> {
     let want = parse_provider(args.provider.as_deref(), &config.defaults.tts_provider)?;
     let codec = AudioCodec::from_str(&args.codec).map_err(anyhow::Error::msg)?;
 
-    let mut request = SpeechRequest::new(text);
-    request.language = parse_language(args.lang.as_deref(), &config.defaults.language);
-    request.voice = args.voice.clone();
-    request.model = args.model.clone();
-    request.codec = codec;
-    request.sample_rate = args.sample_rate;
-    request.bit_rate = args.bit_rate;
-    request.speed = args.speed;
-    request.optimize_streaming_latency = args.optimize_streaming_latency;
-    request.text_normalization = args.text_normalization.then_some(true);
-    request.with_timestamps = args.with_timestamps;
-    request.instructions = args.instructions.clone();
+    if args.long {
+        return speak_long(
+            &composition,
+            want,
+            &args,
+            &config.defaults.language,
+            text,
+            codec,
+        )
+        .await;
+    }
+
+    let request = speech_request_from_args(&args, &config.defaults.language, text, codec);
 
     let output = composition
         .engine
@@ -458,6 +481,135 @@ async fn speak(config: &Config, args: SpeakArgs) -> anyhow::Result<()> {
     );
     println!("{}", out.display());
     Ok(())
+}
+
+fn speech_request_from_args(
+    args: &SpeakArgs,
+    default_language: &str,
+    text: String,
+    codec: AudioCodec,
+) -> SpeechRequest {
+    let mut request = SpeechRequest::new(text);
+    request.language = parse_language(args.lang.as_deref(), default_language);
+    request.voice = args.voice.clone();
+    request.model = args.model.clone();
+    request.codec = codec;
+    request.sample_rate = args.sample_rate;
+    request.bit_rate = args.bit_rate;
+    request.speed = args.speed;
+    request.optimize_streaming_latency = args.optimize_streaming_latency;
+    request.text_normalization = args.text_normalization.then_some(true);
+    request.with_timestamps = args.with_timestamps;
+    request.instructions = args.instructions.clone();
+    request
+}
+
+async fn speak_long(
+    composition: &compose::Composition,
+    want: Option<ProviderId>,
+    args: &SpeakArgs,
+    default_language: &str,
+    text: String,
+    codec: AudioCodec,
+) -> anyhow::Result<()> {
+    let chunks = split_long_text(&text, args.chunk_chars.max(200));
+    if chunks.is_empty() {
+        bail!("no text to synthesize");
+    }
+    let out = args
+        .out
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(format!("speech.{}", codec.extension())));
+    let temp = tempfile::tempdir()?;
+    let mut chunk_paths = Vec::with_capacity(chunks.len());
+    let mut manifest = Vec::with_capacity(chunks.len());
+    for (index, chunk) in chunks.iter().enumerate() {
+        let request = speech_request_from_args(args, default_language, chunk.clone(), codec);
+        let output = composition
+            .engine
+            .speak(request, want)
+            .await
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        let path = temp
+            .path()
+            .join(format!("chunk-{index:04}.{}", output.codec.extension()));
+        std::fs::write(&path, &output.bytes)
+            .with_context(|| format!("writing {}", path.display()))?;
+        manifest.push(serde_json::json!({
+            "index": index,
+            "chars": chunk.chars().count(),
+            "bytes": output.bytes.len(),
+            "provider": output.provider,
+            "codec": output.codec,
+            "metadata": output.metadata,
+        }));
+        eprintln!(
+            "chunk {}/{}: {} chars, {} bytes via {}",
+            index + 1,
+            chunks.len(),
+            chunk.chars().count(),
+            output.bytes.len(),
+            output.provider
+        );
+        chunk_paths.push(path);
+    }
+    composition
+        .decoder
+        .concat_files(&chunk_paths, &out)
+        .await
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    if let Some(path) = &args.manifest {
+        std::fs::write(path, serde_json::to_string_pretty(&manifest)? + "\n")
+            .with_context(|| format!("writing {}", path.display()))?;
+        eprintln!("wrote {} (long-form manifest)", path.display());
+    }
+    eprintln!("wrote {} ({} chunks)", out.display(), chunks.len());
+    println!("{}", out.display());
+    Ok(())
+}
+
+fn split_long_text(text: &str, max_chars: usize) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    for paragraph in text.split("\n\n") {
+        for sentence in paragraph.split_inclusive(['.', '!', '?', '\n']) {
+            let sentence = sentence.trim();
+            if sentence.is_empty() {
+                continue;
+            }
+            let needs_space = !current.is_empty();
+            let next_len =
+                current.chars().count() + sentence.chars().count() + usize::from(needs_space);
+            if next_len > max_chars && !current.is_empty() {
+                chunks.push(current.trim().to_string());
+                current.clear();
+            }
+            if !current.is_empty() {
+                current.push(' ');
+            }
+            if sentence.chars().count() > max_chars {
+                for word in sentence.split_whitespace() {
+                    let next_len = current.chars().count()
+                        + word.chars().count()
+                        + usize::from(!current.is_empty());
+                    if next_len > max_chars && !current.is_empty() {
+                        chunks.push(current.trim().to_string());
+                        current.clear();
+                    }
+                    if !current.is_empty() {
+                        current.push(' ');
+                    }
+                    current.push_str(word);
+                }
+            } else {
+                current.push_str(sentence);
+            }
+        }
+    }
+    if !current.trim().is_empty() {
+        chunks.push(current.trim().to_string());
+    }
+    chunks
 }
 
 async fn stream_stt(config: &Config, args: StreamSttArgs) -> anyhow::Result<()> {
@@ -905,19 +1057,96 @@ fn xai_provider(config: &Config) -> anyhow::Result<ov_providers::XaiProvider> {
     })
 }
 
+async fn smoke(config: &Config, target: SmokeTarget) -> anyhow::Result<()> {
+    match target {
+        SmokeTarget::Local => smoke_local(config).await,
+        SmokeTarget::Xai => smoke_xai(config).await,
+    }
+}
+
+async fn smoke_local(config: &Config) -> anyhow::Result<()> {
+    if !compose::local_canary_compiled() || !compose::local_qwen3_compiled() {
+        bail!("local smoke requires a build with local STT and local TTS features");
+    }
+    if !compose::local_canary_installed(config) {
+        bail!("local-canary model missing (run: openvoice models fetch canary-1b-v2)");
+    }
+    if compose::local_qwen3_source(config).is_none() {
+        bail!("local-qwen3 model missing (run: openvoice models fetch qwen3-tts)");
+    }
+    let composition = compose::build(config);
+    let mut speech = SpeechRequest::new("Hola, esta es una prueba local de open voice.");
+    speech.language = Some(Language::new("es"));
+    speech.codec = AudioCodec::Wav;
+    let audio = composition
+        .engine
+        .speak(speech, Some(ProviderId::LocalQwen3))
+        .await
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    let temp = tempfile::NamedTempFile::new()?.into_temp_path();
+    std::fs::write(&temp, &audio.bytes).with_context(|| format!("writing {}", temp.display()))?;
+    let mut transcribe = TranscribeRequest::new(AudioSource::File(temp.to_path_buf()));
+    transcribe.language = Some(Language::new("es"));
+    let transcript = composition
+        .engine
+        .transcribe(transcribe, Some(ProviderId::LocalCanary))
+        .await
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    println!("local smoke ok: {}", transcript.text.trim());
+    Ok(())
+}
+
+async fn smoke_xai(config: &Config) -> anyhow::Result<()> {
+    let _ = xai_provider(config)?;
+    let composition = compose::build(config);
+    let mut speech = SpeechRequest::new("Open voice xAI smoke test.");
+    speech.language = Some(Language::new("en"));
+    speech.codec = AudioCodec::Mp3;
+    let audio = composition
+        .engine
+        .speak(speech, Some(ProviderId::Xai))
+        .await
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    let mut transcribe = TranscribeRequest::new(AudioSource::Bytes {
+        data: audio.bytes,
+        file_name: "openvoice-smoke.mp3".into(),
+        mime: audio.mime,
+    });
+    transcribe.language = Some(Language::new("en"));
+    let transcript = composition
+        .engine
+        .transcribe(transcribe, Some(ProviderId::Xai))
+        .await
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    println!("xai smoke ok: {}", transcript.text.trim());
+    Ok(())
+}
+
 async fn models_fetch(config: &Config, name: &str) -> anyhow::Result<()> {
     let model = ov_local::models::find(name)
         .with_context(|| format!("unknown model '{name}' (see: openvoice models list)"))?;
     let models_dir = config.models_dir();
     eprintln!("fetching {} into {}", model.name, models_dir.display());
+    let mut last_progress: std::collections::HashMap<String, u64> =
+        std::collections::HashMap::new();
     let dir = model
-        .fetch(&models_dir, "https://huggingface.co", |file, bytes| {
-            if bytes == 0 {
-                eprintln!("  {file}: already present");
-            } else {
-                eprintln!("  {file}: {bytes} bytes");
-            }
-        })
+        .fetch(
+            &models_dir,
+            "https://huggingface.co",
+            |file, bytes, total| {
+                const STEP: u64 = 50 * 1024 * 1024;
+                let done = total == Some(bytes);
+                let last = last_progress.entry(file.to_string()).or_insert(0);
+                if !done && bytes.saturating_sub(*last) < STEP {
+                    return;
+                }
+                *last = bytes;
+                match total {
+                    Some(total) if total > 0 => eprintln!("  {file}: {bytes}/{total} bytes"),
+                    _ => eprintln!("  {file}: {bytes} bytes"),
+                }
+            },
+        )
         .await
         .map_err(|e| anyhow::anyhow!(e.to_string()))?;
     println!("{}", dir.display());
@@ -1040,6 +1269,12 @@ mod tests {
     }
 
     #[test]
+    fn parses_smoke_invocation() {
+        let cli = Cli::try_parse_from(["openvoice", "smoke", "local"]).unwrap();
+        assert!(matches!(cli.command, Command::Smoke { .. }));
+    }
+
+    #[test]
     fn parses_voice_commands() {
         let cli =
             Cli::try_parse_from(["openvoice", "voices", "list", "--provider", "xai"]).unwrap();
@@ -1058,6 +1293,17 @@ mod tests {
         ])
         .unwrap();
         assert!(matches!(cli.command, Command::Voices { .. }));
+    }
+
+    #[test]
+    fn long_text_splitter_prefers_sentence_boundaries() {
+        let chunks = split_long_text(
+            "One sentence. Two sentence. A verylongwordwithoutspaces",
+            20,
+        );
+        assert_eq!(chunks[0], "One sentence.");
+        assert_eq!(chunks[1], "Two sentence.");
+        assert!(chunks.iter().all(|c| !c.trim().is_empty()));
     }
 
     #[test]

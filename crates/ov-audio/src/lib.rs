@@ -83,6 +83,59 @@ impl FfmpegDecoder {
         }
         Ok(output.stdout)
     }
+
+    pub async fn concat_files(&self, inputs: &[PathBuf], output: &Path) -> CoreResult<()> {
+        if inputs.is_empty() {
+            return Err(CoreError::InvalidInput(
+                "no audio chunks to concatenate".into(),
+            ));
+        }
+        if inputs.len() == 1 {
+            std::fs::copy(&inputs[0], output).map_err(|e| {
+                CoreError::Io(format!(
+                    "copying {} to {}: {e}",
+                    inputs[0].display(),
+                    output.display()
+                ))
+            })?;
+            return Ok(());
+        }
+        let list = tempfile::Builder::new()
+            .prefix("openvoice.concat.")
+            .suffix(".txt")
+            .tempfile()
+            .map_err(|e| CoreError::Io(format!("creating concat list: {e}")))?;
+        let (_, list_path) = list
+            .keep()
+            .map_err(|e| CoreError::Io(format!("persisting concat list: {e}")))?;
+        let mut content = String::new();
+        for input in inputs {
+            content.push_str("file '");
+            content.push_str(&input.to_string_lossy().replace('\'', "'\\''"));
+            content.push_str("'\n");
+        }
+        std::fs::write(&list_path, content)
+            .map_err(|e| CoreError::Io(format!("writing {}: {e}", list_path.display())))?;
+
+        let list_str = list_path.to_string_lossy().into_owned();
+        let output_str = output.to_string_lossy().into_owned();
+        let result = self
+            .run_ffmpeg(&[
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                &list_str,
+                "-c",
+                "copy",
+                &output_str,
+            ])
+            .await
+            .map(|_| ());
+        let _ = std::fs::remove_file(list_path);
+        result
+    }
 }
 
 #[async_trait]

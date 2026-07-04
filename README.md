@@ -10,6 +10,7 @@ openvoice transcribe "WhatsApp Ptt 2026-07-02 at 14.56.03.ogg" --lang es --forma
 
 # Text-to-speech
 openvoice speak "Hola mundo" --lang es --out hola.mp3
+openvoice speak --file script.txt --long --chunk-chars 1200 --manifest script.json --out script.mp3
 
 # Voice discovery + xAI Custom Voices
 openvoice voices list
@@ -23,6 +24,7 @@ openvoice stream tts "Hola mundo" --lang es --out hola.mp3
 openvoice providers list
 openvoice providers doctor
 openvoice models fetch canary-1b-v2
+openvoice smoke local
 
 # Shell completions
 openvoice completions zsh > ~/.local/share/zsh/site-functions/_openvoice
@@ -154,6 +156,19 @@ openvoice stream stt call.wav --provider xai --smart-turn --smart-turn-timeout-m
 
 When `--with-timestamps` returns a JSON response, open-voice writes the audio
 file plus a `<audio-extension>.json` sidecar with timestamp metadata.
+
+Long-form TTS (`--long`) splits text on paragraph/sentence boundaries,
+synthesizes each chunk, then stitches the chunks with ffmpeg. `--manifest`
+writes per-chunk provider/codec/metadata details. Model downloads resume from
+`.part` files when Hugging Face supports range requests and print throttled
+progress for large files.
+
+Smoke checks are opt-in because they may load local models or call paid APIs:
+
+```bash
+openvoice smoke local   # local Qwen3 TTS -> local Canary STT round trip
+openvoice smoke xai     # xAI TTS -> xAI STT round trip, requires XAI_API_KEY
+```
 
 ## Architecture
 

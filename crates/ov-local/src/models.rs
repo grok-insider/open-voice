@@ -140,7 +140,7 @@ impl ModelSpec {
         &self,
         models_dir: &Path,
         base_url: &str,
-        mut progress: impl FnMut(&str, u64),
+        mut progress: impl FnMut(&str, u64, Option<u64>),
     ) -> CoreResult<PathBuf> {
         let dir = self.dir(models_dir);
         tokio::fs::create_dir_all(&dir)
@@ -163,12 +163,18 @@ impl ModelSpec {
                 .map(|m| m.is_file() && m.len() > 0)
                 .unwrap_or(false)
             {
-                progress(file.name, 0);
+                let len = std::fs::metadata(&target).ok().map(|m| m.len());
+                progress(file.name, len.unwrap_or(0), len);
                 continue;
             }
             let url = self.url_for(base_url, file);
-            let response = client
-                .get(&url)
+            let partial = dir.join(format!("{}.part", file.name));
+            let mut resume_at = std::fs::metadata(&partial).map(|m| m.len()).unwrap_or(0);
+            let mut request = client.get(&url);
+            if resume_at > 0 {
+                request = request.header(reqwest::header::RANGE, format!("bytes={resume_at}-"));
+            }
+            let response = request
                 .send()
                 .await
                 .map_err(|e| CoreError::Network(format!("GET {url}: {e}")))?;
@@ -178,21 +184,33 @@ impl ModelSpec {
                     message: format!("GET {url}: HTTP {}", response.status().as_u16()),
                 });
             }
+            let append = resume_at > 0 && response.status() == reqwest::StatusCode::PARTIAL_CONTENT;
+            if resume_at > 0 && !append {
+                // Server ignored Range; restart cleanly rather than mixing bytes.
+                let _ = tokio::fs::remove_file(&partial).await;
+                resume_at = 0;
+            }
+            let total = response.content_length().map(|len| len + resume_at);
 
             // Stream to a .part file, then rename, so partial downloads never
             // masquerade as installed files.
-            let partial = dir.join(format!("{}.part", file.name));
-            let mut out = tokio::fs::File::create(&partial)
+            let mut out = tokio::fs::OpenOptions::new()
+                .create(true)
+                .append(append)
+                .write(true)
+                .truncate(!append)
+                .open(&partial)
                 .await
                 .map_err(|e| CoreError::Io(format!("creating {}: {e}", partial.display())))?;
             let mut stream = response.bytes_stream();
-            let mut written = 0u64;
+            let mut written = resume_at;
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk.map_err(|e| CoreError::Network(format!("reading {url}: {e}")))?;
                 tokio::io::AsyncWriteExt::write_all(&mut out, &chunk)
                     .await
                     .map_err(|e| CoreError::Io(format!("writing {}: {e}", partial.display())))?;
                 written += chunk.len() as u64;
+                progress(file.name, written, total);
             }
             tokio::io::AsyncWriteExt::flush(&mut out)
                 .await
@@ -201,7 +219,7 @@ impl ModelSpec {
             tokio::fs::rename(&partial, &target)
                 .await
                 .map_err(|e| CoreError::Io(format!("renaming {}: {e}", partial.display())))?;
-            progress(file.name, written);
+            progress(file.name, written, total);
         }
         Ok(dir)
     }

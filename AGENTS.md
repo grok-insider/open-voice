@@ -84,6 +84,12 @@ ov-cli ──▶ ov-engine ──▶ ov-core ◀── every adapter crate
   `bit_rate`, `optimize_streaming_latency`, `text_normalization`, and
   `with_timestamps` JSON responses; streaming STT supports Smart Turn query
   parameters. Keep provider tests asserting these wire shapes.
+- **Long-form TTS:** `openvoice speak --long` chunks text by paragraph/sentence,
+  writes temporary chunk audio, then stitches with ffmpeg concat. Keep it
+  opt-in; one-shot `speak` should stay simple and predictable.
+- **Model downloads:** fetch streams to `.part` files and resumes with HTTP
+  Range where supported. CLI progress is intentionally throttled for multi-GB
+  models.
 - **OpenAI:** only `whisper-1` yields verbose_json + word/segment timestamps;
   OGG isn't in its accepted-extension list, so the engine transcodes OGG to
   WAV first (25 MB cap validated before upload).
