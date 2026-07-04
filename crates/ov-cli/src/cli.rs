@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use anyhow::{bail, Context};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap_complete::Shell as CompletionShell;
 use futures_util::StreamExt;
 use ov_config::Config;
 use ov_core::domain::{AudioCodec, AudioSource, Language, SpeechRequest, TranscribeRequest};
@@ -53,6 +54,11 @@ pub enum Command {
         #[command(subcommand)]
         command: ModelsCommand,
     },
+    /// Generate shell completions.
+    Completions {
+        /// Shell to generate completions for.
+        shell: CompletionShell,
+    },
 }
 
 #[derive(Args)]
@@ -99,7 +105,7 @@ pub struct SpeakArgs {
     /// Voice id/name (provider-specific).
     #[arg(long)]
     pub voice: Option<String>,
-    /// Provider: auto, openai, elevenlabs, cartesia, xai.
+    /// Provider: auto, local-qwen3, openai, elevenlabs, cartesia, xai.
     #[arg(long)]
     pub provider: Option<String>,
     /// Provider-specific model override.
@@ -232,6 +238,7 @@ pub async fn run(args: Cli) -> anyhow::Result<()> {
             ModelsCommand::Fetch { name } => models_fetch(&config, &name).await,
             ModelsCommand::Remove { name } => models_remove(&config, &name),
         },
+        Command::Completions { shell } => completions(shell),
     }
 }
 
@@ -565,13 +572,23 @@ fn models_list(config: &Config) -> anyhow::Result<()> {
     println!("models dir: {}", models_dir.display());
     for model in ov_local::models::ALL_MODELS {
         let installed = model.is_installed(&models_dir);
-        println!(
-            "{:<16} {:<12} {}",
-            model.name,
-            if installed { "installed" } else { "missing" },
-            model.description
-        );
+        let hf_cache = model.name == "qwen3-tts" && ov_local::models::hf_cache_present(model.repo);
+        let status = if installed {
+            "installed"
+        } else if hf_cache {
+            "hf-cache"
+        } else {
+            "missing"
+        };
+        println!("{:<16} {:<12} {}", model.name, status, model.description);
     }
+    Ok(())
+}
+
+fn completions(shell: CompletionShell) -> anyhow::Result<()> {
+    let mut command = Cli::command();
+    let name = command.get_name().to_string();
+    clap_complete::generate(shell, &mut command, name, &mut std::io::stdout());
     Ok(())
 }
 
@@ -674,6 +691,12 @@ mod tests {
                 command: StreamCommand::Stt(_)
             }
         ));
+    }
+
+    #[test]
+    fn parses_completion_generation() {
+        let cli = Cli::try_parse_from(["openvoice", "completions", "zsh"]).unwrap();
+        assert!(matches!(cli.command, Command::Completions { .. }));
     }
 
     #[test]

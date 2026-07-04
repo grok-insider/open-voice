@@ -161,7 +161,7 @@ impl Engine {
         if candidates.is_empty() {
             return Err(CoreError::NotConfigured {
                 provider: "auto".into(),
-                message: "no text-to-speech providers are configured (set an API key)".into(),
+                message: "no text-to-speech providers are configured (set an API key or install a local TTS model)".into(),
             });
         }
 

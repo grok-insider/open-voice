@@ -19,6 +19,9 @@ openvoice stream tts "Hola mundo" --lang es --out hola.mp3
 openvoice providers list
 openvoice providers doctor
 openvoice models fetch canary-1b-v2
+
+# Shell completions
+openvoice completions zsh > ~/.local/share/zsh/site-functions/_openvoice
 ```
 
 ## Engines
