@@ -184,6 +184,12 @@ fn response_format(codec: AudioCodec) -> CoreResult<&'static str> {
         AudioCodec::Flac => "flac",
         AudioCodec::Wav => "wav",
         AudioCodec::Pcm => "pcm",
+        AudioCodec::Mulaw | AudioCodec::Alaw => {
+            return Err(CoreError::Unsupported {
+                provider: "openai".into(),
+                message: format!("output codec '{}'", codec.as_str()),
+            })
+        }
     })
 }
 
@@ -195,6 +201,8 @@ fn mime_for(codec: AudioCodec) -> &'static str {
         AudioCodec::Flac => "audio/flac",
         AudioCodec::Wav => "audio/wav",
         AudioCodec::Pcm => "audio/pcm",
+        AudioCodec::Mulaw => "audio/basic",
+        AudioCodec::Alaw => "audio/alaw",
     }
 }
 
@@ -240,6 +248,7 @@ impl BatchSpeechSynthesizer for OpenAiProvider {
             codec: request.codec,
             provider: ProviderId::Openai,
             duration: None,
+            metadata: None,
         })
     }
 }

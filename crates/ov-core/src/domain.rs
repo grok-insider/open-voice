@@ -253,6 +253,8 @@ pub enum AudioCodec {
     Mp3,
     Wav,
     Pcm,
+    Mulaw,
+    Alaw,
     Opus,
     Flac,
     Aac,
@@ -264,6 +266,8 @@ impl AudioCodec {
             AudioCodec::Mp3 => "mp3",
             AudioCodec::Wav => "wav",
             AudioCodec::Pcm => "pcm",
+            AudioCodec::Mulaw => "mulaw",
+            AudioCodec::Alaw => "alaw",
             AudioCodec::Opus => "opus",
             AudioCodec::Flac => "flac",
             AudioCodec::Aac => "aac",
@@ -273,6 +277,8 @@ impl AudioCodec {
     pub fn extension(&self) -> &'static str {
         match self {
             AudioCodec::Pcm => "pcm",
+            AudioCodec::Mulaw => "mulaw",
+            AudioCodec::Alaw => "alaw",
             other => other.as_str(),
         }
     }
@@ -286,6 +292,8 @@ impl std::str::FromStr for AudioCodec {
             "mp3" => Ok(AudioCodec::Mp3),
             "wav" => Ok(AudioCodec::Wav),
             "pcm" => Ok(AudioCodec::Pcm),
+            "mulaw" | "mu-law" | "ulaw" | "pcmu" => Ok(AudioCodec::Mulaw),
+            "alaw" | "a-law" | "pcma" => Ok(AudioCodec::Alaw),
             "opus" => Ok(AudioCodec::Opus),
             "flac" => Ok(AudioCodec::Flac),
             "aac" => Ok(AudioCodec::Aac),
@@ -303,7 +311,11 @@ pub struct SpeechRequest {
     pub model: Option<String>,
     pub codec: AudioCodec,
     pub sample_rate: Option<u32>,
+    pub bit_rate: Option<u32>,
     pub speed: Option<f32>,
+    pub optimize_streaming_latency: Option<u8>,
+    pub text_normalization: Option<bool>,
+    pub with_timestamps: bool,
     /// Free-form style guidance (only some providers support it, e.g. OpenAI
     /// `instructions`).
     pub instructions: Option<String>,
@@ -318,7 +330,11 @@ impl SpeechRequest {
             model: None,
             codec: AudioCodec::Mp3,
             sample_rate: None,
+            bit_rate: None,
             speed: None,
+            optimize_streaming_latency: None,
+            text_normalization: None,
+            with_timestamps: false,
             instructions: None,
         }
     }
@@ -332,6 +348,7 @@ pub struct AudioOutput {
     pub codec: AudioCodec,
     pub provider: ProviderId,
     pub duration: Option<f64>,
+    pub metadata: Option<serde_json::Value>,
 }
 
 #[cfg(test)]

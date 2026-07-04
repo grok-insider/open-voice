@@ -228,6 +228,7 @@ impl BatchSpeechSynthesizer for CartesiaProvider {
             codec: request.codec,
             provider: ProviderId::Cartesia,
             duration: None,
+            metadata: None,
         })
     }
 }

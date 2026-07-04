@@ -424,14 +424,67 @@ fn codec_fields(codec: AudioCodec, sample_rate: Option<u32>) -> CoreResult<(Stri
         AudioCodec::Mp3 => "mp3",
         AudioCodec::Wav => "wav",
         AudioCodec::Pcm => "pcm",
+        AudioCodec::Mulaw => "mulaw",
+        AudioCodec::Alaw => "alaw",
         other => {
             return Err(CoreError::Unsupported {
                 provider: "xai".into(),
-                message: format!("output codec '{}' (use mp3, wav, or pcm)", other.as_str()),
+                message: format!(
+                    "output codec '{}' (use mp3, wav, pcm, mulaw, or alaw)",
+                    other.as_str()
+                ),
             })
         }
     };
     Ok((name.to_string(), sample_rate.unwrap_or(24_000)))
+}
+
+fn mime_for_codec(codec: AudioCodec) -> &'static str {
+    match codec {
+        AudioCodec::Mp3 => "audio/mpeg",
+        AudioCodec::Wav => "audio/wav",
+        AudioCodec::Pcm => "audio/pcm",
+        AudioCodec::Mulaw => "audio/basic",
+        AudioCodec::Alaw => "audio/alaw",
+        AudioCodec::Opus => "audio/opus",
+        AudioCodec::Flac => "audio/flac",
+        AudioCodec::Aac => "audio/aac",
+    }
+}
+
+fn redact_audio_fields(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for key in ["audio", "audio_base64", "data"] {
+                if map.get(key).and_then(serde_json::Value::as_str).is_some() {
+                    map.insert(key.to_string(), serde_json::json!("<base64 audio omitted>"));
+                }
+            }
+            for value in map.values_mut() {
+                redact_audio_fields(value);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                redact_audio_fields(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn audio_base64(value: &serde_json::Value) -> Option<&str> {
+    value
+        .get("audio")
+        .or_else(|| value.get("audio_base64"))
+        .or_else(|| value.get("data"))
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            value
+                .get("data")
+                .and_then(|v| v.get("audio"))
+                .and_then(serde_json::Value::as_str)
+        })
 }
 
 #[async_trait]
@@ -448,14 +501,30 @@ impl BatchSpeechSynthesizer for XaiProvider {
             .unwrap_or("auto")
             .to_string();
         let (codec, sample_rate) = codec_fields(request.codec, request.sample_rate)?;
+        let mut output_format = serde_json::json!({ "codec": codec, "sample_rate": sample_rate });
+        if let Some(bit_rate) = request.bit_rate {
+            output_format["bit_rate"] = serde_json::json!(bit_rate);
+        }
         let mut body = serde_json::json!({
             "text": request.text,
             "language": language,
             "voice_id": voice,
-            "output_format": { "codec": codec, "sample_rate": sample_rate },
+            "output_format": output_format,
         });
+        if let Some(model) = &request.model {
+            body["model"] = serde_json::json!(model);
+        }
         if let Some(speed) = request.speed {
             body["speed"] = serde_json::json!(speed);
+        }
+        if let Some(latency) = request.optimize_streaming_latency {
+            body["optimize_streaming_latency"] = serde_json::json!(latency);
+        }
+        if let Some(text_normalization) = request.text_normalization {
+            body["text_normalization"] = serde_json::json!(text_normalization);
+        }
+        if request.with_timestamps {
+            body["with_timestamps"] = serde_json::json!(true);
         }
 
         let response = self
@@ -473,15 +542,42 @@ impl BatchSpeechSynthesizer for XaiProvider {
             .headers()
             .get("content-type")
             .and_then(|v| v.to_str().ok())
-            .unwrap_or("application/octet-stream")
+            .unwrap_or_else(|| mime_for_codec(request.codec))
             .to_string();
         let bytes = response.bytes().await.map_err(http::network_err)?;
+        if request.with_timestamps || mime.contains("json") {
+            let mut value: serde_json::Value =
+                serde_json::from_slice(&bytes).map_err(|e| CoreError::Provider {
+                    provider: "xai".into(),
+                    message: format!("decoding timestamp response: {e}"),
+                })?;
+            let encoded = audio_base64(&value).ok_or_else(|| CoreError::Provider {
+                provider: "xai".into(),
+                message: "timestamp response did not include audio".into(),
+            })?;
+            let audio = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .map_err(|e| CoreError::Provider {
+                    provider: "xai".into(),
+                    message: format!("decoding timestamp audio: {e}"),
+                })?;
+            redact_audio_fields(&mut value);
+            return Ok(AudioOutput {
+                bytes: audio,
+                mime: mime_for_codec(request.codec).to_string(),
+                codec: request.codec,
+                provider: ProviderId::Xai,
+                duration: None,
+                metadata: Some(value),
+            });
+        }
         Ok(AudioOutput {
             bytes: bytes.to_vec(),
             mime,
             codec: request.codec,
             provider: ProviderId::Xai,
             duration: None,
+            metadata: None,
         })
     }
 }
@@ -518,6 +614,12 @@ impl StreamingTranscriber for XaiProvider {
         );
         if request.interim_results {
             url.push_str("&interim_results=true");
+        }
+        if request.smart_turn {
+            url.push_str("&smart_turn=true");
+        }
+        if let Some(timeout) = request.smart_turn_timeout_ms {
+            url.push_str(&format!("&smart_turn_timeout_ms={timeout}"));
         }
         if let Some(language) = &request.language {
             url.push_str(&format!(
@@ -657,6 +759,13 @@ impl StreamingSpeechSynthesizer for XaiProvider {
             codec,
             sample_rate,
         );
+        let mut url = url;
+        if let Some(bit_rate) = request.bit_rate {
+            url.push_str(&format!("&bit_rate={bit_rate}"));
+        }
+        if let Some(latency) = request.optimize_streaming_latency {
+            url.push_str(&format!("&optimize_streaming_latency={latency}"));
+        }
 
         let ws_request = self.ws_request(&url)?;
         let (socket, _) = connect_async(ws_request)

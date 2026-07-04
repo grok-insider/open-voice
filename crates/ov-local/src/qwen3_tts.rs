@@ -163,6 +163,8 @@ impl BatchSpeechSynthesizer for Qwen3TtsLocalProvider {
             AudioCodec::Aac => "audio/aac",
             AudioCodec::Opus => "audio/opus",
             AudioCodec::Pcm => "audio/pcm",
+            AudioCodec::Mulaw => "audio/basic",
+            AudioCodec::Alaw => "audio/alaw",
         };
         Ok(AudioOutput {
             bytes,
@@ -170,6 +172,7 @@ impl BatchSpeechSynthesizer for Qwen3TtsLocalProvider {
             codec: request.codec,
             provider: ProviderId::LocalQwen3,
             duration: None,
+            metadata: None,
         })
     }
 }

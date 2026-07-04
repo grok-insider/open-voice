@@ -119,15 +119,27 @@ pub struct SpeakArgs {
     /// Output audio file (extension defaults from --codec).
     #[arg(long, short)]
     pub out: Option<PathBuf>,
-    /// Output codec: mp3, wav, pcm, opus, flac, aac.
+    /// Output codec: mp3, wav, pcm, mulaw, alaw, opus, flac, aac.
     #[arg(long, default_value = "mp3")]
     pub codec: String,
     /// Output sample rate in Hz.
     #[arg(long)]
     pub sample_rate: Option<u32>,
+    /// Output bitrate in bits per second (xAI mp3).
+    #[arg(long)]
+    pub bit_rate: Option<u32>,
     /// Speech speed multiplier.
     #[arg(long)]
     pub speed: Option<f32>,
+    /// Optimize streaming latency, provider-specific (xAI: 0-2).
+    #[arg(long)]
+    pub optimize_streaming_latency: Option<u8>,
+    /// Ask provider to normalize numbers, abbreviations, and symbols.
+    #[arg(long)]
+    pub text_normalization: bool,
+    /// Request timestamp metadata when the provider supports it.
+    #[arg(long)]
+    pub with_timestamps: bool,
     /// Style instructions (providers that support it).
     #[arg(long)]
     pub instructions: Option<String>,
@@ -157,6 +169,12 @@ pub struct StreamSttArgs {
     /// Also emit interim (non-final) hypotheses.
     #[arg(long)]
     pub interim: bool,
+    /// Enable xAI Smart Turn end-of-turn detection.
+    #[arg(long)]
+    pub smart_turn: bool,
+    /// Maximum Smart Turn wait in milliseconds.
+    #[arg(long)]
+    pub smart_turn_timeout_ms: Option<u64>,
     /// Write final transcript outputs (txt,srt,vtt,json).
     #[arg(long)]
     pub format: Option<String>,
@@ -178,11 +196,15 @@ pub struct StreamTtsArgs {
     /// Output audio file.
     #[arg(long, short, default_value = "speech.mp3")]
     pub out: PathBuf,
-    /// Output codec: mp3, wav, pcm.
+    /// Output codec: mp3, wav, pcm, mulaw, alaw.
     #[arg(long, default_value = "mp3")]
     pub codec: String,
     #[arg(long)]
     pub sample_rate: Option<u32>,
+    #[arg(long)]
+    pub bit_rate: Option<u32>,
+    #[arg(long)]
+    pub optimize_streaming_latency: Option<u8>,
 }
 
 #[derive(Subcommand)]
@@ -399,7 +421,11 @@ async fn speak(config: &Config, args: SpeakArgs) -> anyhow::Result<()> {
     request.model = args.model.clone();
     request.codec = codec;
     request.sample_rate = args.sample_rate;
+    request.bit_rate = args.bit_rate;
     request.speed = args.speed;
+    request.optimize_streaming_latency = args.optimize_streaming_latency;
+    request.text_normalization = args.text_normalization.then_some(true);
+    request.with_timestamps = args.with_timestamps;
     request.instructions = args.instructions.clone();
 
     let output = composition
@@ -412,6 +438,17 @@ async fn speak(config: &Config, args: SpeakArgs) -> anyhow::Result<()> {
         .out
         .unwrap_or_else(|| PathBuf::from(format!("speech.{}", codec.extension())));
     std::fs::write(&out, &output.bytes).with_context(|| format!("writing {}", out.display()))?;
+    if let Some(metadata) = &output.metadata {
+        let sidecar = out.with_extension(format!(
+            "{}.json",
+            out.extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or_else(|| output.codec.extension())
+        ));
+        std::fs::write(&sidecar, serde_json::to_string_pretty(metadata)? + "\n")
+            .with_context(|| format!("writing {}", sidecar.display()))?;
+        eprintln!("wrote {} (timestamp metadata)", sidecar.display());
+    }
     eprintln!(
         "wrote {} ({} bytes, {}, via {})",
         out.display(),
@@ -449,6 +486,8 @@ async fn stream_stt(config: &Config, args: StreamSttArgs) -> anyhow::Result<()> 
         diarize: args.diarize,
         keyterms: args.keyterms.clone(),
         interim_results: args.interim,
+        smart_turn: args.smart_turn,
+        smart_turn_timeout_ms: args.smart_turn_timeout_ms,
     };
 
     let mut stream = provider
@@ -502,6 +541,8 @@ async fn stream_tts(config: &Config, args: StreamTtsArgs) -> anyhow::Result<()> 
     request.voice = args.voice.clone();
     request.codec = AudioCodec::from_str(&args.codec).map_err(anyhow::Error::msg)?;
     request.sample_rate = args.sample_rate;
+    request.bit_rate = args.bit_rate;
+    request.optimize_streaming_latency = args.optimize_streaming_latency;
 
     let mut stream = provider
         .stream_synthesize(request)
@@ -950,19 +991,46 @@ mod tests {
             "--provider",
             "xai",
             "--codec",
-            "wav",
+            "mulaw",
+            "--bit-rate",
+            "128000",
+            "--optimize-streaming-latency",
+            "1",
+            "--text-normalization",
+            "--with-timestamps",
         ])
         .unwrap();
-        assert!(matches!(cli.command, Command::Speak(_)));
-
-        let cli =
-            Cli::try_parse_from(["openvoice", "stream", "stt", "a.ogg", "--interim"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Command::Stream {
-                command: StreamCommand::Stt(_)
+        match cli.command {
+            Command::Speak(args) => {
+                assert_eq!(args.codec, "mulaw");
+                assert_eq!(args.bit_rate, Some(128_000));
+                assert_eq!(args.optimize_streaming_latency, Some(1));
+                assert!(args.text_normalization);
+                assert!(args.with_timestamps);
             }
-        ));
+            _ => panic!("wrong command"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "openvoice",
+            "stream",
+            "stt",
+            "a.ogg",
+            "--interim",
+            "--smart-turn",
+            "--smart-turn-timeout-ms",
+            "1500",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Stream {
+                command: StreamCommand::Stt(args),
+            } => {
+                assert!(args.smart_turn);
+                assert_eq!(args.smart_turn_timeout_ms, Some(1500));
+            }
+            _ => panic!("wrong command"),
+        }
     }
 
     #[test]

@@ -501,6 +501,7 @@ mod tests {
                 codec: request.codec,
                 provider: self.id,
                 duration: None,
+                metadata: None,
             })
         }
     }

@@ -62,6 +62,8 @@ pub struct StreamTranscribeRequest {
     pub diarize: bool,
     pub keyterms: Vec<String>,
     pub interim_results: bool,
+    pub smart_turn: bool,
+    pub smart_turn_timeout_ms: Option<u64>,
 }
 
 /// Streaming speech-to-text.

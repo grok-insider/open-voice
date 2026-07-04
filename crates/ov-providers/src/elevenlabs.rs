@@ -230,6 +230,7 @@ impl BatchSpeechSynthesizer for ElevenLabsProvider {
             codec: request.codec,
             provider: ProviderId::Elevenlabs,
             duration: None,
+            metadata: None,
         })
     }
 }

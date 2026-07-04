@@ -142,6 +142,19 @@ Custom voice IDs returned by xAI are used with `--voice`, the same as built-in
 voices (`eve`, `ara`, `rex`, `sal`, `leo`). xAI currently limits reference
 audio to 120 seconds and custom voices to 30 per team.
 
+xAI-specific TTS options are exposed directly:
+
+```bash
+openvoice speak "Order 123 is ready [pause] thank you." \
+  --provider xai --voice <voice_id> --codec mulaw --sample-rate 8000 \
+  --text-normalization --with-timestamps --out call.mulaw
+
+openvoice stream stt call.wav --provider xai --smart-turn --smart-turn-timeout-ms 1500
+```
+
+When `--with-timestamps` returns a JSON response, open-voice writes the audio
+file plus a `<audio-extension>.json` sidecar with timestamp metadata.
+
 ## Architecture
 
 Hexagonal: `ov-core` defines the domain + port traits, adapters implement

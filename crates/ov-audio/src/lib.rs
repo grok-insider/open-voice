@@ -160,6 +160,8 @@ impl AudioEncoder for FfmpegDecoder {
             AudioCodec::Aac => "adts",
             AudioCodec::Opus => "opus",
             AudioCodec::Pcm => "s16le",
+            AudioCodec::Mulaw => "mulaw",
+            AudioCodec::Alaw => "alaw",
         };
         let mut args: Vec<String> = vec![
             "-y".into(),

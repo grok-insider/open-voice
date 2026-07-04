@@ -1,5 +1,6 @@
 //! Hermetic xAI batch STT/TTS tests against a mock HTTP server.
 
+use base64::Engine as _;
 use ov_core::domain::{AudioCodec, AudioSource, SpeechRequest, TranscribeRequest};
 use ov_core::ports::{BatchSpeechSynthesizer, BatchTranscriber, Provider};
 use ov_core::{CoreError, ProviderId};
@@ -90,6 +91,10 @@ async fn synthesize_builds_tts_payload() {
     let mut request = SpeechRequest::new("Hola mundo");
     request.language = Some(ov_core::domain::Language::new("es"));
     request.speed = Some(1.1);
+    request.model = Some("grok-voice-latest".into());
+    request.bit_rate = Some(128_000);
+    request.optimize_streaming_latency = Some(1);
+    request.text_normalization = Some(true);
     let output = provider(server.uri()).synthesize(request).await.unwrap();
     assert_eq!(output.bytes, b"MP3DATA");
     assert_eq!(output.mime, "audio/mpeg");
@@ -99,9 +104,45 @@ async fn synthesize_builds_tts_payload() {
     assert_eq!(body["text"], "Hola mundo");
     assert_eq!(body["language"], "es");
     assert_eq!(body["voice_id"], "eve");
+    assert_eq!(body["model"], "grok-voice-latest");
     assert_eq!(body["output_format"]["codec"], "mp3");
+    assert_eq!(body["output_format"]["bit_rate"], 128000);
+    assert_eq!(body["optimize_streaming_latency"], 1);
+    assert_eq!(body["text_normalization"], true);
     let speed = body["speed"].as_f64().unwrap();
     assert!((speed - 1.1).abs() < 1e-6, "speed {speed}");
+}
+
+#[tokio::test]
+async fn synthesize_maps_timestamp_json_response() {
+    let server = MockServer::start().await;
+    let audio = base64::engine::general_purpose::STANDARD.encode(b"MP3DATA");
+    Mock::given(method("POST"))
+        .and(path("/v1/tts"))
+        .and(header("authorization", "Bearer xai-key"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_json(serde_json::json!({
+                    "audio": audio,
+                    "characters": [{"char": "H", "start": 0.0, "end": 0.1}]
+                })),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut request = SpeechRequest::new("Hola");
+    request.with_timestamps = true;
+    let output = provider(server.uri()).synthesize(request).await.unwrap();
+    assert_eq!(output.bytes, b"MP3DATA");
+    let metadata = output.metadata.expect("timestamp metadata");
+    assert_eq!(metadata["audio"], "<base64 audio omitted>");
+    assert_eq!(metadata["characters"][0]["char"], "H");
+
+    let received: Vec<Request> = server.received_requests().await.unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
+    assert_eq!(body["with_timestamps"], true);
 }
 
 #[tokio::test]

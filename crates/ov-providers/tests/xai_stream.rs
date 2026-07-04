@@ -125,6 +125,8 @@ async fn streaming_stt_round_trip() {
         diarize: false,
         keyterms: vec!["Hola".into()],
         interim_results: true,
+        smart_turn: true,
+        smart_turn_timeout_ms: Some(1500),
     };
 
     let mut stream = provider(ws_url).stream_transcribe(request).await.unwrap();

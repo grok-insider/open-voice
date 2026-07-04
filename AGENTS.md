@@ -80,6 +80,10 @@ ov-cli ──▶ ov-engine ──▶ ov-core ◀── every adapter crate
   `voice_id` is used anywhere a normal xAI `voice_id` works. Creation is
   multipart with metadata fields before the `file` part. Reference clips are
   capped at 120s and teams are capped at 30 custom voices.
+- **xAI TTS/STT options:** TTS supports telephony codecs (`mulaw`/`alaw`),
+  `bit_rate`, `optimize_streaming_latency`, `text_normalization`, and
+  `with_timestamps` JSON responses; streaming STT supports Smart Turn query
+  parameters. Keep provider tests asserting these wire shapes.
 - **OpenAI:** only `whisper-1` yields verbose_json + word/segment timestamps;
   OGG isn't in its accepted-extension list, so the engine transcodes OGG to
   WAV first (25 MB cap validated before upload).
