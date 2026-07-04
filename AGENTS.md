@@ -90,6 +90,9 @@ ov-cli ──▶ ov-engine ──▶ ov-core ◀── every adapter crate
 - **Model downloads:** fetch streams to `.part` files and resumes with HTTP
   Range where supported. CLI progress is intentionally throttled for multi-GB
   models.
+- **xAI realtime agent:** `openvoice agent` is intentionally xAI-specific for
+  now and maps one text turn onto `/v1/realtime`. Keep the provider-side tests
+  hermetic with local WebSocket servers; don't require a live API key in CI.
 - **OpenAI:** only `whisper-1` yields verbose_json + word/segment timestamps;
   OGG isn't in its accepted-extension list, so the engine transcodes OGG to
   WAV first (25 MB cap validated before upload).

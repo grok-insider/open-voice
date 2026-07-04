@@ -152,6 +152,7 @@ openvoice speak "Order 123 is ready [pause] thank you." \
   --text-normalization --with-timestamps --out call.mulaw
 
 openvoice stream stt call.wav --provider xai --smart-turn --smart-turn-timeout-ms 1500
+openvoice agent "Talk me through the plan" --voice eve --out reply.pcm
 ```
 
 When `--with-timestamps` returns a JSON response, open-voice writes the audio
@@ -168,6 +169,16 @@ Smoke checks are opt-in because they may load local models or call paid APIs:
 ```bash
 openvoice smoke local   # local Qwen3 TTS -> local Canary STT round trip
 openvoice smoke xai     # xAI TTS -> xAI STT round trip, requires XAI_API_KEY
+```
+
+Realtime Voice Agent support uses xAI's `/v1/realtime` WebSocket API for one
+text turn at a time. Audio output is raw PCM/G.711 bytes, so use an extension
+like `.pcm`, `.mulaw`, or `.alaw` and play/convert it with a tool that knows the
+sample rate:
+
+```bash
+openvoice agent "Say this in a calm support voice" --voice eve --out reply.pcm
+openvoice agent "Answer only in text" --text-only --json
 ```
 
 ## Architecture

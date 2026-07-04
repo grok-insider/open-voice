@@ -2,12 +2,12 @@
 //! speaks the documented protocol.
 
 use futures_util::{SinkExt, StreamExt};
-use ov_core::domain::{Language, SpeechRequest};
+use ov_core::domain::{AudioCodec, Language, SpeechRequest};
 use ov_core::ports::{
     AudioEvent, PcmChunk, StreamTranscribeRequest, StreamingSpeechSynthesizer,
     StreamingTranscriber, TranscriptEvent,
 };
-use ov_providers::{XaiProvider, XaiSettings};
+use ov_providers::{RealtimeAgentRequest, XaiProvider, XaiSettings};
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -103,6 +103,135 @@ async fn spawn_tts_server() -> String {
     format!("ws://{addr}")
 }
 
+async fn spawn_realtime_server() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_hdr_async(
+            stream,
+            |request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
+                assert!(request.uri().to_string().contains("/v1/realtime?"));
+                assert!(request
+                    .uri()
+                    .to_string()
+                    .contains("model=grok-voice-latest"));
+                assert_eq!(
+                    request
+                        .headers()
+                        .get("authorization")
+                        .and_then(|v| v.to_str().ok()),
+                    Some("Bearer xai-key")
+                );
+                Ok(response)
+            },
+        )
+        .await
+        .unwrap();
+
+        let session: serde_json::Value = serde_json::from_str(
+            ws.next()
+                .await
+                .unwrap()
+                .unwrap()
+                .into_text()
+                .unwrap()
+                .as_str(),
+        )
+        .unwrap();
+        assert_eq!(session["type"], "session.update");
+        assert_eq!(session["session"]["voice"], "eve");
+        assert_eq!(
+            session["session"]["audio"]["output"]["format"]["type"],
+            "audio/pcm"
+        );
+        assert_eq!(session["session"]["turn_detection"]["type"], "server_vad");
+
+        let item: serde_json::Value = serde_json::from_str(
+            ws.next()
+                .await
+                .unwrap()
+                .unwrap()
+                .into_text()
+                .unwrap()
+                .as_str(),
+        )
+        .unwrap();
+        assert_eq!(item["type"], "conversation.item.create");
+        assert_eq!(item["item"]["content"][0]["text"], "Hello realtime");
+
+        let response_create: serde_json::Value = serde_json::from_str(
+            ws.next()
+                .await
+                .unwrap()
+                .unwrap()
+                .into_text()
+                .unwrap()
+                .as_str(),
+        )
+        .unwrap();
+        assert_eq!(response_create["type"], "response.create");
+        assert_eq!(response_create["response"]["modalities"][0], "audio");
+
+        use base64::Engine as _;
+        ws.send(Message::Text(
+            serde_json::json!({
+                "type": "conversation.created",
+                "conversation": { "id": "conv_123" }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        ws.send(Message::Text(
+            serde_json::json!({
+                "type": "response.created",
+                "response": { "id": "resp_123", "status": "in_progress" }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        ws.send(Message::Text(
+            serde_json::json!({
+                "type": "response.output_audio.delta",
+                "delta": base64::engine::general_purpose::STANDARD.encode(b"PCM")
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        ws.send(Message::Text(
+            serde_json::json!({
+                "type": "response.output_audio_transcript.delta",
+                "delta": "Hello "
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        ws.send(Message::Text(
+            serde_json::json!({
+                "type": "response.output_audio_transcript.done",
+                "transcript": "Hello there."
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        ws.send(Message::Text(
+            serde_json::json!({
+                "type": "response.done",
+                "response": { "id": "resp_123", "status": "completed" }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+    });
+    format!("ws://{addr}")
+}
+
 fn provider(ws_url: String) -> XaiProvider {
     XaiProvider::new(
         "xai-key",
@@ -170,4 +299,21 @@ async fn streaming_tts_round_trip() {
     }
     assert!(finished);
     assert_eq!(audio, b"AUDIO1");
+}
+
+#[tokio::test]
+async fn realtime_agent_text_turn_round_trip() {
+    let ws_url = spawn_realtime_server().await;
+    let mut request = RealtimeAgentRequest::text("Hello realtime");
+    request.voice = Some("eve".into());
+    request.output_codec = AudioCodec::Pcm;
+
+    let turn = provider(ws_url).realtime_text_turn(request).await.unwrap();
+
+    assert_eq!(turn.text, "Hello there.");
+    assert_eq!(turn.audio, b"PCM");
+    assert_eq!(turn.audio_mime, "audio/pcm");
+    assert_eq!(turn.conversation_id.as_deref(), Some("conv_123"));
+    assert_eq!(turn.response_id.as_deref(), Some("resp_123"));
+    assert_eq!(turn.response_status.as_deref(), Some("completed"));
 }

@@ -15,6 +15,7 @@ use ov_core::ports::{
 };
 use ov_core::ProviderId;
 use ov_output::OutputFormat;
+use ov_providers::RealtimeAgentRequest;
 
 use crate::compose;
 
@@ -44,6 +45,8 @@ pub enum Command {
         #[command(subcommand)]
         command: StreamCommand,
     },
+    /// Run one xAI realtime Voice Agent text turn.
+    Agent(AgentArgs),
     /// Inspect configured providers.
     Providers {
         #[command(subcommand)]
@@ -222,6 +225,54 @@ pub struct StreamTtsArgs {
     pub optimize_streaming_latency: Option<u8>,
 }
 
+#[derive(Args)]
+pub struct AgentArgs {
+    /// User text turn to send to the realtime voice agent.
+    pub text: String,
+    /// xAI voice id: eve, ara, rex, sal, leo, or a custom voice_id.
+    #[arg(long)]
+    pub voice: Option<String>,
+    /// Realtime model: grok-voice-latest, grok-voice-fast-1.0, etc.
+    #[arg(long)]
+    pub model: Option<String>,
+    /// Session instructions.
+    #[arg(long)]
+    pub instructions: Option<String>,
+    /// Reasoning effort: high or none.
+    #[arg(long)]
+    pub reasoning_effort: Option<String>,
+    /// Output audio file. Realtime audio is raw PCM/G.711 bytes.
+    #[arg(long, short)]
+    pub out: Option<PathBuf>,
+    /// Output codec: pcm, mulaw, alaw.
+    #[arg(long, default_value = "pcm")]
+    pub codec: String,
+    /// Output audio sample rate.
+    #[arg(long, default_value_t = 24_000)]
+    pub sample_rate: u32,
+    /// Request text only, no audio modality.
+    #[arg(long)]
+    pub text_only: bool,
+    /// Configure manual turn mode instead of server VAD.
+    #[arg(long)]
+    pub manual_turn: bool,
+    /// Server VAD threshold.
+    #[arg(long)]
+    pub vad_threshold: Option<f32>,
+    /// Server VAD silence duration in milliseconds.
+    #[arg(long)]
+    pub vad_silence_ms: Option<u64>,
+    /// Server VAD prefix padding in milliseconds.
+    #[arg(long)]
+    pub vad_prefix_padding_ms: Option<u64>,
+    /// Enable input transcription with this language hint.
+    #[arg(long)]
+    pub language_hint: Option<String>,
+    /// Emit the whole turn as JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
 #[derive(Subcommand)]
 pub enum ProvidersCommand {
     /// List providers and their status.
@@ -367,6 +418,7 @@ pub async fn run(args: Cli) -> anyhow::Result<()> {
             StreamCommand::Stt(cmd) => stream_stt(&config, cmd).await,
             StreamCommand::Tts(cmd) => stream_tts(&config, cmd).await,
         },
+        Command::Agent(cmd) => agent(&config, cmd).await,
         Command::Providers { command } => match command {
             ProvidersCommand::List => providers_list(&config),
             ProvidersCommand::Doctor => providers_doctor(&config),
@@ -711,6 +763,55 @@ async fn stream_tts(config: &Config, args: StreamTtsArgs) -> anyhow::Result<()> 
     std::fs::write(&args.out, &bytes).with_context(|| format!("writing {}", args.out.display()))?;
     eprintln!("wrote {} ({} bytes)", args.out.display(), bytes.len());
     println!("{}", args.out.display());
+    Ok(())
+}
+
+async fn agent(config: &Config, args: AgentArgs) -> anyhow::Result<()> {
+    let provider = xai_provider(config)?;
+    let codec = AudioCodec::from_str(&args.codec).map_err(anyhow::Error::msg)?;
+    let mut request = RealtimeAgentRequest::text(args.text);
+    request.voice = args.voice;
+    request.model = args.model;
+    request.instructions = args.instructions;
+    request.reasoning_effort = args.reasoning_effort;
+    request.output_codec = codec;
+    request.output_sample_rate = args.sample_rate;
+    request.input_sample_rate = args.sample_rate;
+    request.text_only = args.text_only;
+    request.manual_turn = args.manual_turn;
+    request.vad_threshold = args.vad_threshold;
+    request.vad_silence_duration_ms = args.vad_silence_ms;
+    request.vad_prefix_padding_ms = args.vad_prefix_padding_ms;
+    request.language_hint = args.language_hint;
+
+    let turn = provider
+        .realtime_text_turn(request)
+        .await
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    if let Some(path) = &args.out {
+        if !turn.audio.is_empty() {
+            std::fs::write(path, &turn.audio)
+                .with_context(|| format!("writing {}", path.display()))?;
+            eprintln!(
+                "wrote {} ({} bytes, {}, {} Hz)",
+                path.display(),
+                turn.audio.len(),
+                turn.audio_mime,
+                turn.output_sample_rate
+            );
+        }
+    } else if !turn.audio.is_empty() {
+        eprintln!(
+            "received {} bytes of {}; pass --out to save raw realtime audio",
+            turn.audio.len(),
+            turn.audio_mime
+        );
+    }
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&turn)?);
+    } else {
+        println!("{}", turn.text.trim());
+    }
     Ok(())
 }
 
@@ -1266,6 +1367,20 @@ mod tests {
     fn parses_completion_generation() {
         let cli = Cli::try_parse_from(["openvoice", "completions", "zsh"]).unwrap();
         assert!(matches!(cli.command, Command::Completions { .. }));
+    }
+
+    #[test]
+    fn parses_agent_invocation() {
+        let cli = Cli::try_parse_from([
+            "openvoice",
+            "agent",
+            "hello",
+            "--voice",
+            "eve",
+            "--text-only",
+        ])
+        .unwrap();
+        assert!(matches!(cli.command, Command::Agent(_)));
     }
 
     #[test]

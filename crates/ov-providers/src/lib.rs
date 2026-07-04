@@ -15,6 +15,6 @@ pub use cartesia::{CartesiaProvider, CartesiaSettings};
 pub use elevenlabs::{ElevenLabsProvider, ElevenLabsSettings};
 pub use openai::{OpenAiProvider, OpenAiSettings};
 pub use xai::{
-    CustomVoiceCreateRequest, CustomVoiceList, CustomVoiceUpdateRequest, XaiProvider, XaiSettings,
-    XaiVoice, XAI_BUILT_IN_VOICES,
+    CustomVoiceCreateRequest, CustomVoiceList, CustomVoiceUpdateRequest, RealtimeAgentRequest,
+    RealtimeAgentTurn, XaiProvider, XaiSettings, XaiVoice, XAI_BUILT_IN_VOICES,
 };

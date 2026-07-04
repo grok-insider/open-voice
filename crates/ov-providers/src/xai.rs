@@ -128,6 +128,60 @@ pub struct CustomVoiceUpdateRequest {
     pub tone: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct RealtimeAgentRequest {
+    pub text: String,
+    pub model: Option<String>,
+    pub instructions: Option<String>,
+    pub voice: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub output_codec: AudioCodec,
+    pub output_sample_rate: u32,
+    pub input_sample_rate: u32,
+    pub text_only: bool,
+    pub manual_turn: bool,
+    pub vad_threshold: Option<f32>,
+    pub vad_silence_duration_ms: Option<u64>,
+    pub vad_prefix_padding_ms: Option<u64>,
+    pub transcription_model: Option<String>,
+    pub language_hint: Option<String>,
+}
+
+impl RealtimeAgentRequest {
+    pub fn text(text: impl Into<String>) -> Self {
+        RealtimeAgentRequest {
+            text: text.into(),
+            model: None,
+            instructions: None,
+            voice: None,
+            reasoning_effort: None,
+            output_codec: AudioCodec::Pcm,
+            output_sample_rate: 24_000,
+            input_sample_rate: 24_000,
+            text_only: false,
+            manual_turn: false,
+            vad_threshold: None,
+            vad_silence_duration_ms: None,
+            vad_prefix_padding_ms: None,
+            transcription_model: None,
+            language_hint: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RealtimeAgentTurn {
+    pub text: String,
+    pub audio: Vec<u8>,
+    pub audio_mime: String,
+    pub audio_codec: AudioCodec,
+    pub output_sample_rate: u32,
+    pub input_transcript: Option<String>,
+    pub conversation_id: Option<String>,
+    pub response_id: Option<String>,
+    pub response_status: Option<String>,
+}
+
 impl XaiProvider {
     pub fn new(api_key: impl Into<String>, settings: XaiSettings) -> Self {
         XaiProvider {
@@ -295,6 +349,255 @@ impl XaiProvider {
             .get("deleted")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(true))
+    }
+
+    pub async fn realtime_text_turn(
+        &self,
+        request: RealtimeAgentRequest,
+    ) -> CoreResult<RealtimeAgentTurn> {
+        let (output_mime, output_sample_rate) =
+            realtime_audio_format(request.output_codec, Some(request.output_sample_rate))?;
+        let (input_mime, input_sample_rate) =
+            realtime_audio_format(AudioCodec::Pcm, Some(request.input_sample_rate))?;
+        let model = request
+            .model
+            .clone()
+            .unwrap_or_else(|| "grok-voice-latest".to_string());
+        let mut url = format!(
+            "{}/v1/realtime?model={}",
+            self.settings.ws_url,
+            urlencoding::encode(&model)
+        );
+        if let Some(effort) = &request.reasoning_effort {
+            url.push_str(&format!(
+                "&reasoning.effort={}",
+                urlencoding::encode(effort)
+            ));
+        }
+
+        let ws_request = self.ws_request(&url)?;
+        let (socket, _) = connect_async(ws_request)
+            .await
+            .map_err(|e| CoreError::Network(format!("websocket connect: {e}")))?;
+        let (mut sink, mut stream) = socket.split();
+
+        let voice = request
+            .voice
+            .clone()
+            .unwrap_or_else(|| self.settings.tts_voice.clone());
+        let mut session = serde_json::json!({
+            "model": model,
+            "voice": voice,
+            "audio": {
+                "input": { "format": { "type": input_mime, "rate": input_sample_rate } },
+                "output": { "format": { "type": output_mime, "rate": output_sample_rate } }
+            },
+            "turn_detection": if request.manual_turn {
+                serde_json::Value::Null
+            } else {
+                serde_json::json!({ "type": "server_vad" })
+            }
+        });
+        if let Some(instructions) = &request.instructions {
+            session["instructions"] = serde_json::json!(instructions);
+        }
+        if let Some(effort) = &request.reasoning_effort {
+            session["reasoning"] = serde_json::json!({ "effort": effort });
+        }
+        if !request.manual_turn {
+            if let Some(threshold) = request.vad_threshold {
+                session["turn_detection"]["threshold"] = serde_json::json!(threshold);
+            }
+            if let Some(ms) = request.vad_silence_duration_ms {
+                session["turn_detection"]["silence_duration_ms"] = serde_json::json!(ms);
+            }
+            if let Some(ms) = request.vad_prefix_padding_ms {
+                session["turn_detection"]["prefix_padding_ms"] = serde_json::json!(ms);
+            }
+        }
+        if request.transcription_model.is_some() || request.language_hint.is_some() {
+            let mut transcription = serde_json::json!({
+                "model": request
+                    .transcription_model
+                    .clone()
+                    .unwrap_or_else(|| "grok-transcribe".to_string())
+            });
+            if let Some(language_hint) = &request.language_hint {
+                transcription["language_hint"] = serde_json::json!(language_hint);
+            }
+            session["audio"]["input"]["transcription"] = transcription;
+        }
+        let session_update = serde_json::json!({
+            "type": "session.update",
+            "session": session,
+        });
+        sink.send(Message::Text(session_update.to_string()))
+            .await
+            .map_err(|e| CoreError::Network(format!("websocket send: {e}")))?;
+
+        let item = serde_json::json!({
+            "type": "conversation.item.create",
+            "item": {
+                "type": "message",
+                "role": "user",
+                "content": [{ "type": "input_text", "text": request.text }]
+            }
+        });
+        sink.send(Message::Text(item.to_string()))
+            .await
+            .map_err(|e| CoreError::Network(format!("websocket send: {e}")))?;
+        let modalities = if request.text_only {
+            serde_json::json!(["text"])
+        } else {
+            serde_json::json!(["audio", "text"])
+        };
+        let response_create = serde_json::json!({
+            "type": "response.create",
+            "response": { "modalities": modalities }
+        });
+        sink.send(Message::Text(response_create.to_string()))
+            .await
+            .map_err(|e| CoreError::Network(format!("websocket send: {e}")))?;
+
+        let mut audio = Vec::new();
+        let mut transcript_delta = String::new();
+        let mut transcript_done = None;
+        let mut text_delta = String::new();
+        let mut input_transcript = None;
+        let mut conversation_id = None;
+        let mut response_id = None;
+        let mut response_status = None;
+
+        while let Some(message) = stream.next().await {
+            let text = match message {
+                Ok(Message::Text(text)) => text,
+                Ok(Message::Close(_)) => break,
+                Ok(_) => continue,
+                Err(e) => return Err(CoreError::Network(format!("websocket: {e}"))),
+            };
+            let value: serde_json::Value =
+                serde_json::from_str(&text).map_err(|e| CoreError::Provider {
+                    provider: "xai".into(),
+                    message: format!("decoding realtime event: {e}"),
+                })?;
+            let kind = value.get("type").and_then(serde_json::Value::as_str);
+            match kind {
+                Some("conversation.created") => {
+                    conversation_id = value
+                        .get("conversation")
+                        .and_then(|v| v.get("id"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string);
+                }
+                Some("response.created") => {
+                    response_id = value
+                        .get("response")
+                        .and_then(|v| v.get("id"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string);
+                }
+                Some("response.output_audio.delta") => {
+                    if let Some(encoded) = value.get("delta").and_then(serde_json::Value::as_str) {
+                        let bytes = base64::engine::general_purpose::STANDARD
+                            .decode(encoded)
+                            .map_err(|e| CoreError::Provider {
+                                provider: "xai".into(),
+                                message: format!("decoding realtime audio: {e}"),
+                            })?;
+                        audio.extend_from_slice(&bytes);
+                    }
+                }
+                Some("response.output_audio_transcript.delta") => {
+                    if let Some(delta) = value.get("delta").and_then(serde_json::Value::as_str) {
+                        transcript_delta.push_str(delta);
+                    }
+                }
+                Some("response.output_audio_transcript.done") => {
+                    transcript_done = value
+                        .get("transcript")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string);
+                }
+                Some("response.text.delta") | Some("response.output_text.delta") => {
+                    if let Some(delta) = value.get("delta").and_then(serde_json::Value::as_str) {
+                        text_delta.push_str(delta);
+                    }
+                }
+                Some("conversation.item.input_audio_transcription.updated")
+                | Some("conversation.item.input_audio_transcription.completed") => {
+                    input_transcript = value
+                        .get("transcript")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string);
+                }
+                Some("response.done") => {
+                    response_id = value
+                        .get("response")
+                        .and_then(|v| v.get("id"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                        .or(response_id);
+                    response_status = value
+                        .get("response")
+                        .and_then(|v| v.get("status"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string);
+                    break;
+                }
+                Some("error") => return Err(realtime_error(value)),
+                _ => {}
+            }
+        }
+
+        Ok(RealtimeAgentTurn {
+            text: transcript_done.unwrap_or_else(|| {
+                if transcript_delta.is_empty() {
+                    text_delta
+                } else {
+                    transcript_delta
+                }
+            }),
+            audio,
+            audio_mime: output_mime,
+            audio_codec: request.output_codec,
+            output_sample_rate,
+            input_transcript,
+            conversation_id,
+            response_id,
+            response_status,
+        })
+    }
+}
+
+fn realtime_audio_format(codec: AudioCodec, sample_rate: Option<u32>) -> CoreResult<(String, u32)> {
+    let name = match codec {
+        AudioCodec::Pcm => "audio/pcm",
+        AudioCodec::Mulaw => "audio/pcmu",
+        AudioCodec::Alaw => "audio/pcma",
+        other => {
+            return Err(CoreError::Unsupported {
+                provider: "xai".into(),
+                message: format!(
+                    "realtime codec '{}' (use pcm, mulaw, or alaw)",
+                    other.as_str()
+                ),
+            })
+        }
+    };
+    Ok((name.to_string(), sample_rate.unwrap_or(24_000)))
+}
+
+fn realtime_error(value: serde_json::Value) -> CoreError {
+    let message = value
+        .get("error")
+        .and_then(|v| v.get("message"))
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| value.get("message").and_then(serde_json::Value::as_str))
+        .unwrap_or("realtime ws error")
+        .to_string();
+    CoreError::Provider {
+        provider: "xai".into(),
+        message,
     }
 }
 
