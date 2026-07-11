@@ -168,3 +168,13 @@ openvoice stream stt clip.ogg --lang es --interim
   adapter.
 - Model weights are never committed or redistributed; they download from
   Hugging Face at runtime into the XDG data dir.
+
+## Branch model (Model A)
+
+- Human feature/fix/docs PRs target **`dev`**, not `master`.
+- **`master`:** released line. Protected; required checks include CI + **`only dev into master`**.
+- **`dev`:** integration branch. Land work here first.
+- **Guard:** `.github/workflows/guard-master.yml` allowlists `dev` and release-bot heads.
+- **Flow:** `feat/*` → PR into `dev` → batch via `dev`→`master` PR → release on merge to `master`.
+- Org QC: `~/dev/opensource/docs/comparison.md`.
+
