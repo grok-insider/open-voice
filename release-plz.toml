@@ -39,8 +39,8 @@ publish = false
 release_always = true
 # Application binaries + internal libraries, not a published API surface.
 semver_check = false
-# End-user app: treat `feat:` as a minor bump even on 0.x.
-features_always_increment_minor = true
+# Auto stream stays on patch: feat: does not force minor.
+features_always_increment_minor = false
 # Opt-in model: don't process any crate by default. `ov-cli` opts in below; the
 # other crates ride the shared workspace version with no tag/release of their
 # own.
