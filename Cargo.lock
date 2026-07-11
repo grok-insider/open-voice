@@ -2076,7 +2076,7 @@ dependencies = [
 
 [[package]]
 name = "ov-audio"
-version = "0.3.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "ov-core",
@@ -2086,7 +2086,7 @@ dependencies = [
 
 [[package]]
 name = "ov-cli"
-version = "0.3.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2111,7 +2111,7 @@ dependencies = [
 
 [[package]]
 name = "ov-config"
-version = "0.3.0"
+version = "0.0.1"
 dependencies = [
  "dirs",
  "ov-core",
@@ -2122,7 +2122,7 @@ dependencies = [
 
 [[package]]
 name = "ov-core"
-version = "0.3.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "futures",
@@ -2133,7 +2133,7 @@ dependencies = [
 
 [[package]]
 name = "ov-engine"
-version = "0.3.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "futures",
@@ -2145,7 +2145,7 @@ dependencies = [
 
 [[package]]
 name = "ov-local"
-version = "0.3.0"
+version = "0.0.1"
 dependencies = [
  "any-tts",
  "async-trait",
@@ -2160,7 +2160,7 @@ dependencies = [
 
 [[package]]
 name = "ov-output"
-version = "0.3.0"
+version = "0.0.1"
 dependencies = [
  "ov-core",
  "serde",
@@ -2170,7 +2170,7 @@ dependencies = [
 
 [[package]]
 name = "ov-providers"
-version = "0.3.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
